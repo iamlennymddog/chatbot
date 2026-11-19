@@ -1,5 +1,12 @@
 # BitsTalk Deal Buddy – RAG chatbot
 
+> **Branch `llmobs-sdk-only`: comparison branch, not the recommended setup.**
+> The agent is instrumented with the **dd-trace LLM Observability SDK** only: nested agent / tool / retrieval spans,
+> agent manifests (`llmobs.annotate({ agent })`), `tool_id` metadata on tool spans, and a session ID on the root span.
+> Traces, sessions, APM and logs work, but **LLM Observability shows no Execution Graph** for these traces.
+> The working setup (OpenTelemetry GenAI spans with span links) is on `main`.
+> Compare: `git diff llmobs-sdk-only main -- backend/src`.
+
 ## Layout
 - `backend/` – Node.js + Express API, multi-agent design using the OpenAI Node.js SDK (Chat Completions + tool calling) against Anthropic's OpenAI-compatible endpoint (`https://api.anthropic.com/v1/`), so Claude remains the model provider. Logs are JSON (pino) and go to stdout and `backend/logs/app.log`.
 - `frontend/` – Vue 3 (Composition API, `<script setup>`) + Vite. `/api` is proxied to `localhost:3001`.

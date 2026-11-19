@@ -106,6 +106,9 @@ async function executeTool(toolCall, toolMap, ctx, log, agentName) {
       (out) => ({
         inputData: tool.kind === 'retrieval' ? toolUse.input.query : toolUse.input,
         outputData: tool.spanOutput ? tool.spanOutput(out) : out,
+        // Attempt: tool_id = the LLM's tool_call id, mirroring OTel-ingested traces, to link this span
+        // to the llm span that requested it. Did not make the Execution Graph appear.
+        metadata: { tool_id: toolUse.id, tool_type: 'function', tool_description: tool.definition.description },
         tags: { agent: agentName },
       }),
     );
