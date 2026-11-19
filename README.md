@@ -51,7 +51,7 @@ The chat response includes `steps` (every tool call per agent), which the UI sho
 | Signal | How |
 |---|---|
 | APM | service `bitstalk-deals-chatbot-api`, env `pov`. Express, HTTP and the OpenAI SDK are auto-instrumented. |
-| LLM Observability | **OpenTelemetry GenAI** spans -> Datadog OTLP intake (`https://otlp.datadoghq.com/v1/traces`, headers `dd-api-key`, `dd-otlp-source=llmobs`, `DD-LLMObs-Enabled=true`). `service.name` (`bitstalk-deal-buddy`) becomes the ml_app; `gen_ai.conversation.id` (the chat `sessionId`) groups turns into LLM Obs Sessions. dd-trace's own LLM Obs is off to avoid duplicate LLM spans. |
+| LLM Observability | **OpenTelemetry GenAI** spans -> Datadog OTLP intake (`https://otlp.datadoghq.com/v1/traces`, headers `dd-api-key`, `dd-otlp-source=llmobs`, `DD-LLMObs-Enabled=true`). `service.name` (`bitstalk-deal-buddy`) becomes the ml_app; `gen_ai.conversation.id` (the chat `sessionId`) groups turns into LLM Obs Sessions. dd-trace's own LLM Obs is off to avoid duplicate LLM spans. OTel traces reuse the dd-trace trace ID of the request (`DatadogTraceIdGenerator` in `src/otel.js`), so an LLM Obs trace opens in APM (**View in APM**) with its correlated logs. |
 | Logs | pino JSON -> `backend/logs/app.log`, tailed by the Agent (`datadog/conf.d/bitstalk-chatbot.d`). `DD_LOGS_INJECTION=true` adds `dd.trace_id`/`dd.span_id` (APM); agent logs also carry `otel_trace_id` (LLM Obs trace). |
 | Runtime metrics | `DD_RUNTIME_METRICS_ENABLED=true` via DogStatsD :8125 |
 

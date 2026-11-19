@@ -141,6 +141,7 @@ steps = [
 """),
 ("otel", "Set up OpenTelemetry for LLM Observability", f"""
 <p>Register an OpenTelemetry tracer provider that exports straight to Datadog's OTLP intake. The endpoint and headers come from environment variables (step 9). <code>service.name</code> becomes the LLM Observability <b>ml_app</b>. Export results are logged, because OpenTelemetry silently drops export errors (wrong key or site) by default.</p>
+<div class="callout why"><b>One trace ID across LLM Observability, APM and logs.</b> The <code>DatadogTraceIdGenerator</code> gives every new OpenTelemetry trace the 128-bit trace ID of the active dd-trace span (the HTTP request). That is the same ID dd-trace writes into each log line as <code>dd.trace_id</code>, so from an LLM Observability trace you can click <b>View in APM</b> and then open the trace's <b>Logs</b>.</div>
 {code(otel_js, "js", "backend/src/otel.js")}
 <p>Import it first in the entry point, and flush pending spans on shutdown:</p>
 {code(server_import, "js", "backend/src/server.js (top)")}
@@ -209,6 +210,7 @@ steps = [
 <ol class="verify">
 <li><b>Execution Graph</b> — <a href="https://app.datadoghq.com/llm/traces?query=%40ml_app%3Abitstalk-deal-buddy">LLM Observability → Traces</a>, filter <code>@ml_app:bitstalk-deal-buddy</code>, open a <code>deal-buddy</code> trace and click <b>Execution Graph</b>. You should see <code>deal-buddy</code> → model calls → <code>check_network_coverage</code> / <code>consult_deals_specialist</code> → <code>deals-specialist</code> → <code>search_deals</code> / <code>calculate_contract_cost</code>.</li>
 <li><b>Sessions</b> — the trace header shows the session; <b>View Session</b> lists every turn of the conversation.</li>
+<li><b>LLM Observability → APM → Logs</b> — in the same LLM Observability trace, click <b>View in APM</b>. The APM trace opens with the same trace ID; its <b>Logs</b> tab shows every log line of that request (agent steps, tool calls, retrievals).</li>
 <li><b>APM</b> — <a href="https://app.datadoghq.com/apm/services/bitstalk-deals-chatbot-api">APM → service <code>bitstalk-deals-chatbot-api</code></a>: <code>POST /api/chat</code> with <code>openai.request</code> spans.</li>
 <li><b>Logs</b> — <a href="https://app.datadoghq.com/logs?query=service%3Abitstalk-deals-chatbot-api">Logs, <code>service:bitstalk-deals-chatbot-api</code></a>. Open a log line and use the trace link to jump to its APM trace.</li>
 </ol>
@@ -222,6 +224,7 @@ steps = [
 <tr><td>Every model call appears twice</td><td>Both dd-trace LLM Observability and OpenTelemetry are on. Unset <code>DD_LLMOBS_ENABLED</code>.</td></tr>
 <tr><td>Each turn is its own session</td><td>The frontend must reuse one <code>sessionId</code> per conversation; the backend sets it as <code>gen_ai.conversation.id</code>.</td></tr>
 <tr><td>No APM traces</td><td>Start the backend with <code>node --import dd-trace/initialize.mjs</code> and check the Agent: <code>curl localhost:8126/info</code>.</td></tr>
+<tr><td><b>View in APM</b> finds no trace, or the APM trace has no logs</td><td>The LLM Observability trace ID must equal the dd-trace trace ID. Check that <code>backend/src/otel.js</code> passes <code>idGenerator: new DatadogTraceIdGenerator()</code>, that dd-trace is loaded (<code>--import dd-trace/initialize.mjs</code>), and that <code>otel_trace_id</code> equals <code>dd.trace_id</code> in <code>backend/logs/app.log</code>.</td></tr>
 <tr><td>Logs not linked to traces</td><td>Set <code>DD_LOGS_INJECTION=true</code>, and make sure the Agent's log config uses the same <code>service</code> as <code>DD_SERVICE</code>.</td></tr>
 </table>
 """),

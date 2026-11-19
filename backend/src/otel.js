@@ -7,12 +7,33 @@
 //   (the OpenAI SDK has no native OTel instrumentation, so chat spans are created by hand).
 // - Export goes straight to Datadog's OTLP intake with LLM Obs conversion enabled
 //   (OTEL_EXPORTER_OTLP_TRACES_ENDPOINT / _HEADERS, set by start.sh). service.name -> ml_app.
+// - LLM Obs traces reuse the dd-trace (APM) trace ID of the current request, so a trace opened in
+//   LLM Observability links to its APM trace ("View in APM") and to the correlated logs.
+import ddTracer from 'dd-trace';
 import { NodeTracerProvider } from '@opentelemetry/sdk-trace-node';
-import { BatchSpanProcessor } from '@opentelemetry/sdk-trace-base';
+import { BatchSpanProcessor, RandomIdGenerator } from '@opentelemetry/sdk-trace-base';
 import { resourceFromAttributes } from '@opentelemetry/resources';
 import { OTLPTraceExporter as OTLPProtoExporter } from '@opentelemetry/exporter-trace-otlp-proto';
 import { OTLPTraceExporter as OTLPJsonExporter } from '@opentelemetry/exporter-trace-otlp-http';
 import { logger } from './logger.js';
+
+/**
+ * New OTel traces take the 128-bit trace ID of the active dd-trace span (the HTTP request), which is
+ * also the dd.trace_id injected into every log line. Falls back to a random ID outside a request or
+ * when dd-trace isn't loaded.
+ */
+class DatadogTraceIdGenerator {
+  #random = new RandomIdGenerator();
+
+  generateTraceId() {
+    const ddContext = ddTracer.scope().active()?.context();
+    return ddContext ? ddContext.toTraceId(true) : this.#random.generateTraceId();
+  }
+
+  generateSpanId() {
+    return this.#random.generateSpanId();
+  }
+}
 
 /** Logs every OTLP export result: OTel swallows exporter errors (bad key, wrong endpoint) by default. */
 class LoggingExporter {
@@ -54,6 +75,7 @@ if (otelEnabled) {
 }
 
 export const provider = new NodeTracerProvider({
+  idGenerator: new DatadogTraceIdGenerator(),
   resource: resourceFromAttributes({
     'service.name': process.env.OTEL_SERVICE_NAME || 'bitstalk-deal-buddy',
     'service.version': process.env.DD_VERSION || '1.0.0',
