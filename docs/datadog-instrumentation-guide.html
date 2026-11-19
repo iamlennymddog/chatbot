@@ -65,7 +65,7 @@ footer { color:var(--muted); font-size:13px; padding:24px 40px; }
 <p>Step by step: add APM, logs and LLM Observability — with a working <b>Execution Graph</b> for agents, sub-agents and tools — to the BitsTalk Deal Buddy Node.js agent (OpenAI SDK, Claude models).</p>
 </header>
 <div class="layout">
-<nav><a href="#overview"><span class="n">0</span>How it fits together</a><a href="#prereqs"><span class="n">1</span>Prerequisites</a><a href="#agent"><span class="n">2</span>Run the Datadog Agent</a><a href="#install"><span class="n">3</span>Install the libraries</a><a href="#apm"><span class="n">4</span>APM, logs and trace correlation (dd-trace)</a><a href="#otel"><span class="n">5</span>Set up OpenTelemetry for LLM Observability</a><a href="#helpers"><span class="n">6</span>Add GenAI span helpers</a><a href="#loop"><span class="n">7</span>Instrument the agent loop (Execution Graph)</a><a href="#subagents"><span class="n">8</span>Describe agents and the session</a><a href="#configure"><span class="n">9</span>Configure, start and stop</a><a href="#verify"><span class="n">10</span>Verify in Datadog</a><a href="#troubleshoot"><span class="n">11</span>Troubleshooting</a></nav>
+<nav><a href="#overview"><span class="n">0</span>How it fits together</a><a href="#prereqs"><span class="n">1</span>Prerequisites</a><a href="#agent"><span class="n">2</span>Run the Datadog Agent</a><a href="#install"><span class="n">3</span>Install the libraries</a><a href="#apm"><span class="n">4</span>APM, logs and trace correlation (dd-trace)</a><a href="#otel"><span class="n">5</span>Set up OpenTelemetry for LLM Observability</a><a href="#helpers"><span class="n">6</span>Add GenAI span helpers</a><a href="#loop"><span class="n">7</span>Instrument the agent loop (Execution Graph)</a><a href="#subagents"><span class="n">8</span>Describe agents and the session</a><a href="#prompts"><span class="n">9</span>Track prompt versions</a><a href="#configure"><span class="n">10</span>Configure, start and stop</a><a href="#verify"><span class="n">11</span>Verify in Datadog</a><a href="#troubleshoot"><span class="n">12</span>Troubleshooting</a></nav>
 <main><section id="overview"><h2><span class="n">0</span>How it fits together</h2>
 <p>The chatbot is a small multi-agent system: <b>Deal Buddy</b> (orchestrator, Claude Sonnet) delegates research to the <b>Deals Specialist</b> sub-agent (Claude Haiku), which calls tools. Both agents use the <b>OpenAI Node.js SDK</b> pointed at Anthropic's OpenAI-compatible endpoint.</p>
 <p>Datadog gets the telemetry through two paths:</p>
@@ -200,7 +200,7 @@ npm install dd-trace \
       version: process.env.DD_VERSION || &#x27;1.0.0&#x27;,
     },</code></pre></div>
 </section><section id="otel"><h2><span class="n">5</span>Set up OpenTelemetry for LLM Observability</h2>
-<p>Register an OpenTelemetry tracer provider that exports straight to Datadog's OTLP intake. The endpoint and headers come from environment variables (step 9). <code>service.name</code> becomes the LLM Observability <b>ml_app</b>. Export results are logged, because OpenTelemetry silently drops export errors (wrong key or site) by default.</p>
+<p>Register an OpenTelemetry tracer provider that exports straight to Datadog's OTLP intake. The endpoint and headers come from environment variables (step 10). <code>service.name</code> becomes the LLM Observability <b>ml_app</b>. Export results are logged, because OpenTelemetry silently drops export errors (wrong key or site) by default.</p>
 <div class="callout why"><b>One trace ID across LLM Observability, APM and logs.</b> The <code>DatadogTraceIdGenerator</code> gives every new OpenTelemetry trace the 128-bit trace ID of the active dd-trace span (the HTTP request). That is the same ID dd-trace writes into each log line as <code>dd.trace_id</code>, so from an LLM Observability trace you can click <b>View in APM</b> and then open the trace's <b>Logs</b>.</div>
 <div class="code"><div class="code-title"><span>backend/src/otel.js</span><button class="copy">Copy</button></div><pre><code class="lang-js">// OpenTelemetry GenAI tracing for Datadog LLM Observability (Agent Observability).
 //
@@ -411,7 +411,7 @@ export { SpanKind, SpanStatusCode };</code></pre></div>
 <h4>7b. LLM span</h4>
 <p>The OpenAI SDK does not emit OpenTelemetry spans itself, so wrap each Chat Completions call in a <code>chat</code> span with the request, response, token usage and messages:</p>
 <div class="code"><div class="code-title"><span>backend/src/agents/runAgent.js — chat</span><button class="copy">Copy</button></div><pre><code class="lang-js">/** One Chat Completions call inside a GenAI `chat` span (the OpenAI SDK has no native OTel spans). */
-function chat({ model, maxTokens, convo, toolDefs, systemInstructions, toolDefinitions, ctx, links }) {
+function chat({ model, maxTokens, convo, toolDefs, systemInstructions, toolDefinitions, promptAttr, ctx, links }) {
   return withSpan(
     `chat ${model}`,
     {
@@ -425,6 +425,8 @@ function chat({ model, maxTokens, convo, toolDefs, systemInstructions, toolDefin
         &#x27;gen_ai.system_instructions&#x27;: systemInstructions,
         &#x27;gen_ai.tool.definitions&#x27;: toolDefinitions,
         &#x27;gen_ai.input.messages&#x27;: genAiMessages(convo.filter((m) =&gt; m.role !== &#x27;system&#x27;)),
+        // Prompt tracking (id, version, template, variables); only read on LLM spans.
+        ...(promptAttr ? { &#x27;_dd.ml_obs.prompt_tracking&#x27;: promptAttr } : {}),
       },
       links,
     },
@@ -478,6 +480,7 @@ function chat({ model, maxTokens, convo, toolDefs, systemInstructions, toolDefin
       };</code></pre></div>
 <details><summary>Show the complete runAgent.js</summary><div class="code"><div class="code-title"><span>backend/src/agents/runAgent.js</span><button class="copy">Copy</button></div><pre><code class="lang-js">import { openai } from &#x27;./client.js&#x27;;
 import { withSpan, flow, json, genAiMessages, activeSpan, SpanKind, SpanStatusCode } from &#x27;../tracing.js&#x27;;
+import { promptTracking } from &#x27;./prompts.js&#x27;;
 
 const MAX_ITERATIONS = 6;
 const PROVIDER = &#x27;anthropic&#x27;; // OpenAI SDK -&gt; Anthropic&#x27;s OpenAI-compatible endpoint
@@ -486,13 +489,14 @@ const PROVIDER = &#x27;anthropic&#x27;; // OpenAI SDK -&gt; Anthropic&#x27;s Ope
  * Generic tool-use loop on the OpenAI Chat Completions API, traced with OTel GenAI conventions.
  * tools: [{ definition: {name, description, input_schema}, handler: async (input, ctx) =&gt; any }]
  * ctx:   { log, sessionId, steps, sources } shared across the whole request (all agents).
+ * prompt: { id, version, template, variables } of the system prompt, for LLM Obs prompt tracking.
  *
  * Execution Graph edges (span links, all in one trace):
  *   caller tool --input-&gt;input--&gt; agent --input-&gt;input--&gt; first chat
  *   chat --output-&gt;input--&gt; each tool it called --output-&gt;input--&gt; next chat
  *   last chat --output-&gt;output--&gt; agent --output-&gt;output--&gt; caller tool
  */
-export async function runAgent({ name, description, model, system, messages, tools, ctx, maxTokens = 1024 }) {
+export async function runAgent({ name, description, model, system, prompt, messages, tools, ctx, maxTokens = 1024 }) {
   const toolMap = new Map(tools.map((t) =&gt; [t.definition.name, t]));
   const caller = activeSpan(); // set when this agent is invoked from a tool (sub-agent)
   const toolDefs = tools.map((t) =&gt; ({
@@ -500,6 +504,8 @@ export async function runAgent({ name, description, model, system, messages, too
     function: { name: t.definition.name, description: t.definition.description, parameters: t.definition.input_schema },
   }));
   const systemInstructions = json([{ type: &#x27;text&#x27;, content: system }]);
+  // Same prompt metadata on every LLM call of this agent run; the user message is the agent&#x27;s input.
+  const promptAttr = prompt ? promptTracking(prompt, messages.at(-1)?.content) : undefined;
   const toolDefinitions = json(
     tools.map((t) =&gt; ({
       type: &#x27;function&#x27;,
@@ -549,7 +555,7 @@ export async function runAgent({ name, description, model, system, messages, too
 
       for (let i = 1; i &lt;= MAX_ITERATIONS; i++) {
         const t0 = Date.now();
-        const { response, choice, chatSpan } = await chat({ model, maxTokens, convo, toolDefs, systemInstructions, toolDefinitions, ctx, links: chatInputs });
+        const { response, choice, chatSpan } = await chat({ model, maxTokens, convo, toolDefs, systemInstructions, toolDefinitions, promptAttr, ctx, links: chatInputs });
         lastChat = chatSpan;
         usage.input_tokens += response.usage?.prompt_tokens ?? 0;
         usage.output_tokens += response.usage?.completion_tokens ?? 0;
@@ -587,7 +593,7 @@ export async function runAgent({ name, description, model, system, messages, too
 }
 
 /** One Chat Completions call inside a GenAI `chat` span (the OpenAI SDK has no native OTel spans). */
-function chat({ model, maxTokens, convo, toolDefs, systemInstructions, toolDefinitions, ctx, links }) {
+function chat({ model, maxTokens, convo, toolDefs, systemInstructions, toolDefinitions, promptAttr, ctx, links }) {
   return withSpan(
     `chat ${model}`,
     {
@@ -601,6 +607,8 @@ function chat({ model, maxTokens, convo, toolDefs, systemInstructions, toolDefin
         &#x27;gen_ai.system_instructions&#x27;: systemInstructions,
         &#x27;gen_ai.tool.definitions&#x27;: toolDefinitions,
         &#x27;gen_ai.input.messages&#x27;: genAiMessages(convo.filter((m) =&gt; m.role !== &#x27;system&#x27;)),
+        // Prompt tracking (id, version, template, variables); only read on LLM spans.
+        ...(promptAttr ? { &#x27;_dd.ml_obs.prompt_tracking&#x27;: promptAttr } : {}),
       },
       links,
     },
@@ -677,6 +685,7 @@ function parseArgs(args) {
       description: &#x27;Researches the BitsTalk deals catalogue and calculates contract costs&#x27;,
       model: SPECIALIST_MODEL,
       system,
+      prompt,
       messages: [{ role: &#x27;user&#x27;, content: task }],
       tools,
       ctx,
@@ -706,7 +715,65 @@ fetch(&#x27;/api/chat&#x27;, {
   headers: { &#x27;Content-Type&#x27;: &#x27;application/json&#x27; },
   body: JSON.stringify({ sessionId, messages }),
 })</code></pre></div>
-</section><section id="configure"><h2><span class="n">9</span>Configure, start and stop</h2>
+</section><section id="prompts"><h2><span class="n">9</span>Track prompt versions</h2>
+<p><a href="https://docs.datadoghq.com/llm_observability/monitoring/prompt_tracking/">Prompt Tracking</a> links every LLM call to the prompt template and version that produced it. LLM Observability then shows call counts, tokens and latency per prompt version, diffs two versions, filters traces by prompt, and opens any version in the Playground with its variables.</p>
+<p>With OpenTelemetry, prompt metadata goes on each LLM (<code>chat</code>) span as the attribute <code>_dd.ml_obs.prompt_tracking</code>: a JSON string with <code>id</code>, <code>version</code>, <code>chat_template</code> (or <code>template</code>) and <code>variables</code>.</p>
+<div class="code"><div class="code-title"><span>backend/src/agents/prompts.js</span><button class="copy">Copy</button></div><pre><code class="lang-js">// Versioned prompt templates, tracked in Datadog LLM Observability (Prompt Tracking).
+// Every LLM span carries `_dd.ml_obs.prompt_tracking` (JSON: id, version, chat_template, variables),
+// so LLM Observability groups calls per prompt and version, diffs versions and opens them in
+// Playground. Bump `version` whenever a template changes.
+// https://docs.datadoghq.com/llm_observability/monitoring/prompt_tracking/
+
+/** Fills {{name}} placeholders from variables. */
+export function renderTemplate(template, variables = {}) {
+  return template.replace(/\{\{(\w+)\}\}/g, (_, name) =&gt; String(variables[name] ?? &#x27;&#x27;));
+}
+
+/** Value of the `_dd.ml_obs.prompt_tracking` span attribute for one LLM call. */
+export function promptTracking(prompt, userMessage) {
+  const variables = Object.fromEntries(Object.entries(prompt.variables ?? {}).map(([k, v]) =&gt; [k, String(v)]));
+  return JSON.stringify({
+    id: prompt.id,
+    version: prompt.version,
+    chat_template: [
+      { role: &#x27;system&#x27;, content: prompt.template },
+      { role: &#x27;user&#x27;, content: &#x27;{{user_message}}&#x27; },
+    ],
+    variables: { ...variables, user_message: String(userMessage ?? &#x27;&#x27;) },
+  });
+}</code></pre></div>
+<p>Each agent defines its system prompt as a versioned template. The Deal Buddy prompt has no variables:</p>
+<div class="code"><div class="code-title"><span>backend/src/agents/orchestrator.js</span><button class="copy">Copy</button></div><pre><code class="lang-js">// Tracked in LLM Observability as prompt `deal-buddy-system`. Bump the version when SYSTEM changes.
+export const DEAL_BUDDY_PROMPT = { id: &#x27;deal-buddy-system&#x27;, version: &#x27;1.0.0&#x27;, template: SYSTEM, variables: {} };</code></pre></div>
+<p>The Deals Specialist prompt takes the catalogue details as variables, so they show up separately from the template:</p>
+<div class="code"><div class="code-title"><span>backend/src/agents/dealsSpecialist.js</span><button class="copy">Copy</button></div><pre><code class="lang-js">  // Tracked in LLM Observability as prompt `deals-specialist-system`; catalogue details are variables.
+  // Bump the version when the template changes.
+  const prompt = {
+    id: &#x27;deals-specialist-system&#x27;,
+    version: &#x27;1.0.0&#x27;,
+    template: `You are the BitsTalk Deals Specialist, an internal research agent. You do NOT talk to customers directly;
+you prepare a factual brief for the customer-facing assistant.
+
+- ALWAYS use search_deals to find facts. Search more than once when comparing categories or brands.
+- Use calculate_contract_cost when comparing contracts or when total cost matters.
+- Only report facts from tool results. Never invent prices, devices or deals.
+- Output a concise brief: the 2-4 best matching deals with deal ID, device/plan, monthly price, term, data, extras, and total cost if calculated. Note anything relevant that is NOT available.
+
+Catalogue: {{catalogue}}
+Deals in catalogue: {{deal_ids}}`,
+    variables: {
+      catalogue: index.preamble.replace(/\n/g, &#x27; &#x27;),
+      deal_ids: index.chunks.map((c) =&gt; c.id).join(&#x27;, &#x27;),
+    },
+  };
+  const system = renderTemplate(prompt.template, prompt.variables);</code></pre></div>
+<p>The agent loop builds the attribute once per agent run (the agent's input becomes <code>user_message</code>) and sets it on every <code>chat</code> span:</p>
+<div class="code"><div class="code-title"><span>backend/src/agents/runAgent.js</span><button class="copy">Copy</button></div><pre><code class="lang-js">  // Same prompt metadata on every LLM call of this agent run; the user message is the agent&#x27;s input.
+  const promptAttr = prompt ? promptTracking(prompt, messages.at(-1)?.content) : undefined;</code></pre></div>
+<div class="code"><div class="code-title"><span>backend/src/agents/runAgent.js — chat span attributes</span><button class="copy">Copy</button></div><pre><code class="lang-js">        // Prompt tracking (id, version, template, variables); only read on LLM spans.
+        ...(promptAttr ? { &#x27;_dd.ml_obs.prompt_tracking&#x27;: promptAttr } : {}),</code></pre></div>
+<div class="callout tip"><b>Versioning:</b> bump <code>version</code> whenever you change a template (for example <code>1.0.0</code> → <code>1.1.0</code>). Calls from before and after the change then appear as two versions of the same prompt, which you can compare side by side.</div>
+</section><section id="configure"><h2><span class="n">10</span>Configure, start and stop</h2>
 <p><code>start.sh</code> starts the Agent, then the backend and frontend. These are the Datadog settings it sets for the backend:</p>
 <div class="code"><div class="code-title"><span>start.sh (Datadog section)</span><button class="copy">Copy</button></div><pre><code class="lang-bash">  # APM + log/trace correlation + runtime metrics via dd-trace -&gt; local Agent
   export DD_TRACE_AGENT_URL=&quot;http://localhost:8126&quot;
@@ -779,7 +846,7 @@ elif docker info &gt;/dev/null 2&gt;&amp;1; then
 else
   echo &quot;Datadog Agent: Docker is not running, nothing to stop&quot;
 fi</code></pre></div></details>
-</section><section id="verify"><h2><span class="n">10</span>Verify in Datadog</h2>
+</section><section id="verify"><h2><span class="n">11</span>Verify in Datadog</h2>
 <div class="code"><div class="code-title"><span>Local checks</span><button class="copy">Copy</button></div><pre><code class="lang-bash"># Agent is up and accepting traces
 curl -s http://localhost:8126/info | head -5
 datadog/agent.sh status | grep -A3 &quot;bitstalk-chatbot&quot;
@@ -795,15 +862,17 @@ curl -s -X POST http://localhost:3001/api/chat -H &#x27;content-type: applicatio
 <li><b>Execution Graph</b> — <a href="https://app.datadoghq.com/llm/traces?query=%40ml_app%3Abitstalk-deal-buddy">LLM Observability → Traces</a>, filter <code>@ml_app:bitstalk-deal-buddy</code>, open a <code>deal-buddy</code> trace and click <b>Execution Graph</b>. You should see <code>deal-buddy</code> → model calls → <code>check_network_coverage</code> / <code>consult_deals_specialist</code> → <code>deals-specialist</code> → <code>search_deals</code> / <code>calculate_contract_cost</code>.</li>
 <li><b>Sessions</b> — the trace header shows the session; <b>View Session</b> lists every turn of the conversation.</li>
 <li><b>LLM Observability → APM → Logs</b> — in the same LLM Observability trace, click <b>View in APM</b>. The APM trace opens with the same trace ID; its <b>Logs</b> tab shows every log line of that request (agent steps, tool calls, retrievals).</li>
+<li><b>Prompts</b> — <a href="https://app.datadoghq.com/llm/prompts">LLM Observability → Prompts</a>: <code>deal-buddy-system</code> and <code>deals-specialist-system</code>, version <code>1.0.0</code>, with call counts, tokens and latency. In a trace, the LLM spans show the prompt and its variables.</li>
 <li><b>APM</b> — <a href="https://app.datadoghq.com/apm/services/bitstalk-deals-chatbot-api">APM → service <code>bitstalk-deals-chatbot-api</code></a>: <code>POST /api/chat</code> with <code>openai.request</code> spans.</li>
 <li><b>Logs</b> — <a href="https://app.datadoghq.com/logs?query=service%3Abitstalk-deals-chatbot-api">Logs, <code>service:bitstalk-deals-chatbot-api</code></a>. Open a log line and use the trace link to jump to its APM trace.</li>
 </ol>
 <div class="callout tip">Traces sent over OTLP can take a minute or two to appear in LLM Observability.</div>
-</section><section id="troubleshoot"><h2><span class="n">11</span>Troubleshooting</h2>
+</section><section id="troubleshoot"><h2><span class="n">12</span>Troubleshooting</h2>
 <table>
 <tr><th>Symptom</th><th>Cause and fix</th></tr>
 <tr><td>No traces in LLM Observability</td><td>Check <code>grep otel.export backend/logs/app.log</code>. <code>status: error</code> with 401/403 means a wrong API key or the wrong <code>DD_SITE</code> (the OTLP host is <code>otlp.&lt;site&gt;</code>).</td></tr>
 <tr><td>Traces appear but there is no <b>Execution Graph</b> button</td><td>The spans have no links. Make sure LLM Observability comes from OpenTelemetry (steps 5–7), not from dd-trace's <code>DD_LLMOBS_ENABLED</code>.</td></tr>
+<tr><td>A prompt does not appear under <b>Prompts</b></td><td><code>_dd.ml_obs.prompt_tracking</code> is read only on LLM spans (<code>gen_ai.operation.name=chat</code>) and must be valid JSON with <code>template</code> or <code>chat_template</code>. Search traces for <code>@meta.input.prompt.id:deal-buddy-system</code> to check that it was indexed.</td></tr>
 <tr><td>Every model call appears twice</td><td>Both dd-trace LLM Observability and OpenTelemetry are on. Unset <code>DD_LLMOBS_ENABLED</code>.</td></tr>
 <tr><td>Each turn is its own session</td><td>The frontend must reuse one <code>sessionId</code> per conversation; the backend sets it as <code>gen_ai.conversation.id</code>.</td></tr>
 <tr><td>No APM traces</td><td>Start the backend with <code>node --import dd-trace/initialize.mjs</code> and check the Agent: <code>curl localhost:8126/info</code>.</td></tr>

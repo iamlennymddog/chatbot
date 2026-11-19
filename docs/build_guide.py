@@ -80,6 +80,11 @@ stop_usage = """./stop.sh               # stop backend, frontend and the Datadog
 ./stop.sh --keep-agent  # stop the app, leave the Agent running"""
 import base64
 flow_png = base64.b64encode((ROOT / "docs" / "datadog-communication-flow.png").read_bytes()).decode()
+prompts_js = read("backend/src/agents/prompts.js")
+buddy_prompt = between("backend/src/agents/orchestrator.js", "// Tracked in LLM Observability as prompt", "variables: {} };")
+specialist_prompt = between("backend/src/agents/dealsSpecialist.js", "  // Tracked in LLM Observability as prompt", "  const system = renderTemplate(prompt.template, prompt.variables);")
+prompt_attr = between("backend/src/agents/runAgent.js", "  // Same prompt metadata on every LLM call", "promptTracking(prompt, messages.at(-1)?.content) : undefined;")
+prompt_span = between("backend/src/agents/runAgent.js", "        // Prompt tracking (id, version, template, variables)", "'_dd.ml_obs.prompt_tracking': promptAttr } : {}),")
 agent_start = """DD_API_KEY=<your key> DD_SITE=datadoghq.com datadog/agent.sh up
 datadog/agent.sh status   # API key valid, APM Agent running, bitstalk-chatbot log source OK"""
 flow_diagram = """invoke_agent deal-buddy ─input→ chat(sonnet) ─output→ execute_tool check_network_coverage ─output→ chat(sonnet) ─output→ agent output
@@ -140,7 +145,7 @@ steps = [
 {code(logger_base, "js", "backend/src/logger.js (excerpt)")}
 """),
 ("otel", "Set up OpenTelemetry for LLM Observability", f"""
-<p>Register an OpenTelemetry tracer provider that exports straight to Datadog's OTLP intake. The endpoint and headers come from environment variables (step 9). <code>service.name</code> becomes the LLM Observability <b>ml_app</b>. Export results are logged, because OpenTelemetry silently drops export errors (wrong key or site) by default.</p>
+<p>Register an OpenTelemetry tracer provider that exports straight to Datadog's OTLP intake. The endpoint and headers come from environment variables (step 10). <code>service.name</code> becomes the LLM Observability <b>ml_app</b>. Export results are logged, because OpenTelemetry silently drops export errors (wrong key or site) by default.</p>
 <div class="callout why"><b>One trace ID across LLM Observability, APM and logs.</b> The <code>DatadogTraceIdGenerator</code> gives every new OpenTelemetry trace the 128-bit trace ID of the active dd-trace span (the HTTP request). That is the same ID dd-trace writes into each log line as <code>dd.trace_id</code>, so from an LLM Observability trace you can click <b>View in APM</b> and then open the trace's <b>Logs</b>.</div>
 {code(otel_js, "js", "backend/src/otel.js")}
 <p>Import it first in the entry point, and flush pending spans on shutdown:</p>
@@ -192,6 +197,19 @@ steps = [
 {code(server_session, "js", "backend/src/server.js")}
 {code(frontend_session, "js", "frontend (already in place)")}
 """),
+("prompts", "Track prompt versions", f"""
+<p><a href="https://docs.datadoghq.com/llm_observability/monitoring/prompt_tracking/">Prompt Tracking</a> links every LLM call to the prompt template and version that produced it. LLM Observability then shows call counts, tokens and latency per prompt version, diffs two versions, filters traces by prompt, and opens any version in the Playground with its variables.</p>
+<p>With OpenTelemetry, prompt metadata goes on each LLM (<code>chat</code>) span as the attribute <code>_dd.ml_obs.prompt_tracking</code>: a JSON string with <code>id</code>, <code>version</code>, <code>chat_template</code> (or <code>template</code>) and <code>variables</code>.</p>
+{code(prompts_js, "js", "backend/src/agents/prompts.js")}
+<p>Each agent defines its system prompt as a versioned template. The Deal Buddy prompt has no variables:</p>
+{code(buddy_prompt, "js", "backend/src/agents/orchestrator.js")}
+<p>The Deals Specialist prompt takes the catalogue details as variables, so they show up separately from the template:</p>
+{code(specialist_prompt, "js", "backend/src/agents/dealsSpecialist.js")}
+<p>The agent loop builds the attribute once per agent run (the agent's input becomes <code>user_message</code>) and sets it on every <code>chat</code> span:</p>
+{code(prompt_attr, "js", "backend/src/agents/runAgent.js")}
+{code(prompt_span, "js", "backend/src/agents/runAgent.js — chat span attributes")}
+<div class="callout tip"><b>Versioning:</b> bump <code>version</code> whenever you change a template (for example <code>1.0.0</code> → <code>1.1.0</code>). Calls from before and after the change then appear as two versions of the same prompt, which you can compare side by side.</div>
+"""),
 ("configure", "Configure, start and stop", f"""
 <p><code>start.sh</code> starts the Agent, then the backend and frontend. These are the Datadog settings it sets for the backend:</p>
 {code(start_dd, "bash", "start.sh (Datadog section)")}
@@ -211,6 +229,7 @@ steps = [
 <li><b>Execution Graph</b> — <a href="https://app.datadoghq.com/llm/traces?query=%40ml_app%3Abitstalk-deal-buddy">LLM Observability → Traces</a>, filter <code>@ml_app:bitstalk-deal-buddy</code>, open a <code>deal-buddy</code> trace and click <b>Execution Graph</b>. You should see <code>deal-buddy</code> → model calls → <code>check_network_coverage</code> / <code>consult_deals_specialist</code> → <code>deals-specialist</code> → <code>search_deals</code> / <code>calculate_contract_cost</code>.</li>
 <li><b>Sessions</b> — the trace header shows the session; <b>View Session</b> lists every turn of the conversation.</li>
 <li><b>LLM Observability → APM → Logs</b> — in the same LLM Observability trace, click <b>View in APM</b>. The APM trace opens with the same trace ID; its <b>Logs</b> tab shows every log line of that request (agent steps, tool calls, retrievals).</li>
+<li><b>Prompts</b> — <a href="https://app.datadoghq.com/llm/prompts">LLM Observability → Prompts</a>: <code>deal-buddy-system</code> and <code>deals-specialist-system</code>, version <code>1.0.0</code>, with call counts, tokens and latency. In a trace, the LLM spans show the prompt and its variables.</li>
 <li><b>APM</b> — <a href="https://app.datadoghq.com/apm/services/bitstalk-deals-chatbot-api">APM → service <code>bitstalk-deals-chatbot-api</code></a>: <code>POST /api/chat</code> with <code>openai.request</code> spans.</li>
 <li><b>Logs</b> — <a href="https://app.datadoghq.com/logs?query=service%3Abitstalk-deals-chatbot-api">Logs, <code>service:bitstalk-deals-chatbot-api</code></a>. Open a log line and use the trace link to jump to its APM trace.</li>
 </ol>
@@ -221,6 +240,7 @@ steps = [
 <tr><th>Symptom</th><th>Cause and fix</th></tr>
 <tr><td>No traces in LLM Observability</td><td>Check <code>grep otel.export backend/logs/app.log</code>. <code>status: error</code> with 401/403 means a wrong API key or the wrong <code>DD_SITE</code> (the OTLP host is <code>otlp.&lt;site&gt;</code>).</td></tr>
 <tr><td>Traces appear but there is no <b>Execution Graph</b> button</td><td>The spans have no links. Make sure LLM Observability comes from OpenTelemetry (steps 5–7), not from dd-trace's <code>DD_LLMOBS_ENABLED</code>.</td></tr>
+<tr><td>A prompt does not appear under <b>Prompts</b></td><td><code>_dd.ml_obs.prompt_tracking</code> is read only on LLM spans (<code>gen_ai.operation.name=chat</code>) and must be valid JSON with <code>template</code> or <code>chat_template</code>. Search traces for <code>@meta.input.prompt.id:deal-buddy-system</code> to check that it was indexed.</td></tr>
 <tr><td>Every model call appears twice</td><td>Both dd-trace LLM Observability and OpenTelemetry are on. Unset <code>DD_LLMOBS_ENABLED</code>.</td></tr>
 <tr><td>Each turn is its own session</td><td>The frontend must reuse one <code>sessionId</code> per conversation; the backend sets it as <code>gen_ai.conversation.id</code>.</td></tr>
 <tr><td>No APM traces</td><td>Start the backend with <code>node --import dd-trace/initialize.mjs</code> and check the Agent: <code>curl localhost:8126/info</code>.</td></tr>

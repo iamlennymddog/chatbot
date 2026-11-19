@@ -1,5 +1,6 @@
 import { openai } from './client.js';
 import { withSpan, flow, json, genAiMessages, activeSpan, SpanKind, SpanStatusCode } from '../tracing.js';
+import { promptTracking } from './prompts.js';
 
 const MAX_ITERATIONS = 6;
 const PROVIDER = 'anthropic'; // OpenAI SDK -> Anthropic's OpenAI-compatible endpoint
@@ -8,13 +9,14 @@ const PROVIDER = 'anthropic'; // OpenAI SDK -> Anthropic's OpenAI-compatible end
  * Generic tool-use loop on the OpenAI Chat Completions API, traced with OTel GenAI conventions.
  * tools: [{ definition: {name, description, input_schema}, handler: async (input, ctx) => any }]
  * ctx:   { log, sessionId, steps, sources } shared across the whole request (all agents).
+ * prompt: { id, version, template, variables } of the system prompt, for LLM Obs prompt tracking.
  *
  * Execution Graph edges (span links, all in one trace):
  *   caller tool --input->input--> agent --input->input--> first chat
  *   chat --output->input--> each tool it called --output->input--> next chat
  *   last chat --output->output--> agent --output->output--> caller tool
  */
-export async function runAgent({ name, description, model, system, messages, tools, ctx, maxTokens = 1024 }) {
+export async function runAgent({ name, description, model, system, prompt, messages, tools, ctx, maxTokens = 1024 }) {
   const toolMap = new Map(tools.map((t) => [t.definition.name, t]));
   const caller = activeSpan(); // set when this agent is invoked from a tool (sub-agent)
   const toolDefs = tools.map((t) => ({
@@ -22,6 +24,8 @@ export async function runAgent({ name, description, model, system, messages, too
     function: { name: t.definition.name, description: t.definition.description, parameters: t.definition.input_schema },
   }));
   const systemInstructions = json([{ type: 'text', content: system }]);
+  // Same prompt metadata on every LLM call of this agent run; the user message is the agent's input.
+  const promptAttr = prompt ? promptTracking(prompt, messages.at(-1)?.content) : undefined;
   const toolDefinitions = json(
     tools.map((t) => ({
       type: 'function',
@@ -71,7 +75,7 @@ export async function runAgent({ name, description, model, system, messages, too
 
       for (let i = 1; i <= MAX_ITERATIONS; i++) {
         const t0 = Date.now();
-        const { response, choice, chatSpan } = await chat({ model, maxTokens, convo, toolDefs, systemInstructions, toolDefinitions, ctx, links: chatInputs });
+        const { response, choice, chatSpan } = await chat({ model, maxTokens, convo, toolDefs, systemInstructions, toolDefinitions, promptAttr, ctx, links: chatInputs });
         lastChat = chatSpan;
         usage.input_tokens += response.usage?.prompt_tokens ?? 0;
         usage.output_tokens += response.usage?.completion_tokens ?? 0;
@@ -109,7 +113,7 @@ export async function runAgent({ name, description, model, system, messages, too
 }
 
 /** One Chat Completions call inside a GenAI `chat` span (the OpenAI SDK has no native OTel spans). */
-function chat({ model, maxTokens, convo, toolDefs, systemInstructions, toolDefinitions, ctx, links }) {
+function chat({ model, maxTokens, convo, toolDefs, systemInstructions, toolDefinitions, promptAttr, ctx, links }) {
   return withSpan(
     `chat ${model}`,
     {
@@ -123,6 +127,8 @@ function chat({ model, maxTokens, convo, toolDefs, systemInstructions, toolDefin
         'gen_ai.system_instructions': systemInstructions,
         'gen_ai.tool.definitions': toolDefinitions,
         'gen_ai.input.messages': genAiMessages(convo.filter((m) => m.role !== 'system')),
+        // Prompt tracking (id, version, template, variables); only read on LLM spans.
+        ...(promptAttr ? { '_dd.ml_obs.prompt_tracking': promptAttr } : {}),
       },
       links,
     },

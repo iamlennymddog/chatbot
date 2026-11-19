@@ -2,6 +2,7 @@ import { runAgent } from './runAgent.js';
 import { ORCHESTRATOR_MODEL } from './client.js';
 import { createDealsSpecialist } from './dealsSpecialist.js';
 import { checkNetworkCoverage } from '../tools/coverageTool.js';
+import { renderTemplate } from './prompts.js';
 
 const SYSTEM = `You are "BitsTalk Deal Buddy", a friendly, upbeat customer-facing assistant for BitsTalk South Africa.
 You help customers find the best mobile phone deals, data packages, home internet and roaming bundles.
@@ -17,6 +18,9 @@ How you work:
 - If needs are unclear, recommend options AND ask one short follow-up question (budget, data usage or brand).
 - Keep answers concise with short bullet points. A little South African warmth is welcome ("Howzit!", "lekker deal").
 - For greetings or small talk, respond directly without tools.`;
+
+// Tracked in LLM Observability as prompt `deal-buddy-system`. Bump the version when SYSTEM changes.
+export const DEAL_BUDDY_PROMPT = { id: 'deal-buddy-system', version: '1.0.0', template: SYSTEM, variables: {} };
 
 export function createOrchestrator(index) {
   const consultSpecialist = createDealsSpecialist(index);
@@ -49,7 +53,8 @@ export function createOrchestrator(index) {
       name: 'deal-buddy',
       description: 'Customer-facing BitsTalk deals assistant that delegates research to the Deals Specialist',
       model: ORCHESTRATOR_MODEL,
-      system: SYSTEM,
+      system: renderTemplate(DEAL_BUDDY_PROMPT.template, DEAL_BUDDY_PROMPT.variables),
+      prompt: DEAL_BUDDY_PROMPT,
       messages,
       tools,
       ctx,
