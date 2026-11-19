@@ -7,6 +7,10 @@
 
 Step-by-step guide: [`docs/datadog-instrumentation-guide.html`](docs/datadog-instrumentation-guide.html) (download and open in a browser). `git diff no-instrumentation main` shows every change it describes.
 
+![Telemetry flow](docs/datadog-communication-flow.png)
+
+Telemetry flow diagram: [`docs/datadog-communication-flow.drawio`](docs/datadog-communication-flow.drawio) (open in [diagrams.net](https://app.diagrams.net)). APM traces, runtime metrics (DogStatsD), container metrics and logs go through the local Datadog Agent; LLM Observability goes straight to Datadog's OTLP intake.
+
 ## Layout
 - `backend/` – Node.js + Express API, multi-agent design using the OpenAI Node.js SDK (Chat Completions + tool calling) against Anthropic's OpenAI-compatible endpoint (`https://api.anthropic.com/v1/`), so Claude remains the model provider. Logs are JSON (pino) and go to stdout and `backend/logs/app.log`.
 - `frontend/` – Vue 3 (Composition API, `<script setup>`) + Vite. `/api` is proxied to `localhost:3001`.

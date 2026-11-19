@@ -78,6 +78,8 @@ git diff origin/no-instrumentation main -- backend  # code changes"""
 stop_sh = read("stop.sh")
 stop_usage = """./stop.sh               # stop backend, frontend and the Datadog Agent
 ./stop.sh --keep-agent  # stop the app, leave the Agent running"""
+import base64
+flow_png = base64.b64encode((ROOT / "docs" / "datadog-communication-flow.png").read_bytes()).decode()
 agent_start = """DD_API_KEY=<your key> DD_SITE=datadoghq.com datadog/agent.sh up
 datadog/agent.sh status   # API key valid, APM Agent running, bitstalk-chatbot log source OK"""
 flow_diagram = """invoke_agent deal-buddy ─input→ chat(sonnet) ─output→ execute_tool check_network_coverage ─output→ chat(sonnet) ─output→ agent output
@@ -91,21 +93,13 @@ steps = [
 ("overview", "How it fits together", f"""
 <p>The chatbot is a small multi-agent system: <b>Deal Buddy</b> (orchestrator, Claude Sonnet) delegates research to the <b>Deals Specialist</b> sub-agent (Claude Haiku), which calls tools. Both agents use the <b>OpenAI Node.js SDK</b> pointed at Anthropic's OpenAI-compatible endpoint.</p>
 <p>Datadog gets the telemetry through two paths:</p>
-<div class="arch">
-  <div class="arch-col"><div class="arch-box app">Node.js backend<small>Express · OpenAI SDK · agents &amp; tools</small></div></div>
-  <div class="arch-col arrows">
-    <div class="arrow"><span>dd-trace</span>APM traces · runtime metrics</div>
-    <div class="arrow"><span>log file</span>JSON logs with trace IDs</div>
-    <div class="arrow otel"><span>OpenTelemetry</span>GenAI spans + span links (OTLP/HTTPS)</div>
-  </div>
-  <div class="arch-col">
-    <div class="arch-box agent">Datadog Agent<small>Docker container on the host</small></div>
-    <div class="arch-box dd">Datadog<small>APM · Logs · <b>LLM Observability</b></small></div>
-  </div>
-</div>
+<figure class="diagram"><img src="data:image/png;base64,{flow_png}" alt="Telemetry flow from the BitsTalk Deal Buddy backend to Datadog"><figcaption>Full telemetry flow. Editable source: <code>docs/datadog-communication-flow.drawio</code> (open in <a href="https://app.diagrams.net">diagrams.net</a>).</figcaption></figure>
+<p>In short:</p>
 <table>
 <tr><th>Signal</th><th>Sent by</th><th>Lands in</th></tr>
-<tr><td>APM traces, runtime metrics</td><td><code>dd-trace</code> → Datadog Agent</td><td>APM, service <code>bitstalk-deals-chatbot-api</code></td></tr>
+<tr><td>APM traces</td><td><code>dd-trace</code> → Datadog Agent (<code>localhost:8126</code>, HTTP)</td><td>APM, service <code>bitstalk-deals-chatbot-api</code></td></tr>
+<tr><td>Runtime metrics (<code>runtime.node.*</code>)</td><td><code>dd-trace</code> → Agent DogStatsD (<code>localhost:8125</code>, UDP)</td><td>Metrics</td></tr>
+<tr><td>Container and host metrics (<code>docker.*</code>, <code>system.*</code>)</td><td>collected by the Agent itself (Docker socket, <code>/proc</code>)</td><td>Metrics, Infrastructure</td></tr>
 <tr><td>Logs (correlated to traces)</td><td>pino JSON file → Datadog Agent</td><td>Logs</td></tr>
 <tr><td>Agent traces, sessions, <b>Execution Graph</b></td><td>OpenTelemetry GenAI → Datadog OTLP intake</td><td>LLM Observability, ml_app <code>bitstalk-deal-buddy</code></td></tr>
 </table>
@@ -293,6 +287,9 @@ a {{ color:var(--purple); }}
 .arrow::after {{ content:"→"; position:absolute; right:-16px; top:50%; transform:translateY(-50%); color:#7a7f8f; font-size:18px; }}
 .arrow.otel {{ border-color:var(--purple); }}
 .arrow.otel span {{ color:var(--purple); }}
+figure.diagram {{ margin:16px 0; }}
+figure.diagram img {{ width:100%; border:1px solid var(--line); border-radius:8px; }}
+figure.diagram figcaption {{ font-size:13px; color:var(--muted); margin-top:6px; }}
 footer {{ color:var(--muted); font-size:13px; padding:24px 40px; }}
 @media (max-width:900px) {{ .layout {{ grid-template-columns:1fr; }} nav {{ position:static; max-height:none; border-right:0; border-bottom:1px solid var(--line); }} main {{ padding:8px 18px 60px; }} .arch {{ grid-template-columns:1fr; }} .arrow::after {{ content:"↓"; right:auto; left:50%; top:auto; bottom:-20px; }} }}
 </style>
