@@ -75,6 +75,9 @@ branch_diff = """git clone https://github.com/iamlennymddog/chatbot.git && cd ch
 git fetch origin no-instrumentation
 git diff origin/no-instrumentation main --stat     # files changed
 git diff origin/no-instrumentation main -- backend  # code changes"""
+stop_sh = read("stop.sh")
+stop_usage = """./stop.sh               # stop backend, frontend and the Datadog Agent
+./stop.sh --keep-agent  # stop the app, leave the Agent running"""
 agent_start = """DD_API_KEY=<your key> DD_SITE=datadoghq.com datadog/agent.sh up
 datadog/agent.sh status   # API key valid, APM Agent running, bitstalk-chatbot log source OK"""
 flow_diagram = """invoke_agent deal-buddy ─input→ chat(sonnet) ─output→ execute_tool check_network_coverage ─output→ chat(sonnet) ─output→ agent output
@@ -194,13 +197,17 @@ steps = [
 {code(server_session, "js", "backend/src/server.js")}
 {code(frontend_session, "js", "frontend (already in place)")}
 """),
-("configure", "Configure and start", f"""
+("configure", "Configure, start and stop", f"""
 <p><code>start.sh</code> starts the Agent, then the backend and frontend. These are the Datadog settings it sets for the backend:</p>
 {code(start_dd, "bash", "start.sh (Datadog section)")}
 <div class="callout warn"><b>Keep dd-trace's LLM Observability off.</b> If both <code>DD_LLMOBS_ENABLED</code> and the OpenTelemetry exporter are on, every model call appears twice in LLM Observability.</div>
 <p>To run it with your own credentials:</p>
 {code(env_manual, "bash", "Shell")}
 <div class="callout tip">In this repository <code>start.sh</code> reads both keys with a local <code>getSecretKey</code> helper. Replace those two lines with your own secret store, or export <code>ANTHROPIC_API_KEY</code> and <code>DD_API_KEY</code> and remove the <code>getSecretKey</code> calls.</div>
+<h4>Stop the stack</h4>
+<p><code>stop.sh</code> stops the backend and frontend, then the Datadog Agent container. The backend gets <code>SIGTERM</code> first, so pending OpenTelemetry spans are flushed to Datadog before it exits. Use <code>--keep-agent</code> to stop only the app, which is what Ctrl+C in the <code>start.sh</code> terminal does too.</p>
+{code(stop_usage, "bash", "Shell")}
+{details("Show stop.sh", code(stop_sh, "bash", "stop.sh"))}
 """),
 ("verify", "Verify in Datadog", f"""
 {code(verify_cmd, "bash", "Local checks")}

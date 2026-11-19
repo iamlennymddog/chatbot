@@ -62,7 +62,7 @@ footer { color:var(--muted); font-size:13px; padding:24px 40px; }
 <p>Step by step: add APM, logs and LLM Observability — with a working <b>Execution Graph</b> for agents, sub-agents and tools — to the BitsTalk Deal Buddy Node.js agent (OpenAI SDK, Claude models).</p>
 </header>
 <div class="layout">
-<nav><a href="#overview"><span class="n">0</span>How it fits together</a><a href="#prereqs"><span class="n">1</span>Prerequisites</a><a href="#agent"><span class="n">2</span>Run the Datadog Agent</a><a href="#install"><span class="n">3</span>Install the libraries</a><a href="#apm"><span class="n">4</span>APM, logs and trace correlation (dd-trace)</a><a href="#otel"><span class="n">5</span>Set up OpenTelemetry for LLM Observability</a><a href="#helpers"><span class="n">6</span>Add GenAI span helpers</a><a href="#loop"><span class="n">7</span>Instrument the agent loop (Execution Graph)</a><a href="#subagents"><span class="n">8</span>Describe agents and the session</a><a href="#configure"><span class="n">9</span>Configure and start</a><a href="#verify"><span class="n">10</span>Verify in Datadog</a><a href="#troubleshoot"><span class="n">11</span>Troubleshooting</a></nav>
+<nav><a href="#overview"><span class="n">0</span>How it fits together</a><a href="#prereqs"><span class="n">1</span>Prerequisites</a><a href="#agent"><span class="n">2</span>Run the Datadog Agent</a><a href="#install"><span class="n">3</span>Install the libraries</a><a href="#apm"><span class="n">4</span>APM, logs and trace correlation (dd-trace)</a><a href="#otel"><span class="n">5</span>Set up OpenTelemetry for LLM Observability</a><a href="#helpers"><span class="n">6</span>Add GenAI span helpers</a><a href="#loop"><span class="n">7</span>Instrument the agent loop (Execution Graph)</a><a href="#subagents"><span class="n">8</span>Describe agents and the session</a><a href="#configure"><span class="n">9</span>Configure, start and stop</a><a href="#verify"><span class="n">10</span>Verify in Datadog</a><a href="#troubleshoot"><span class="n">11</span>Troubleshooting</a></nav>
 <main><section id="overview"><h2><span class="n">0</span>How it fits together</h2>
 <p>The chatbot is a small multi-agent system: <b>Deal Buddy</b> (orchestrator, Claude Sonnet) delegates research to the <b>Deals Specialist</b> sub-agent (Claude Haiku), which calls tools. Both agents use the <b>OpenAI Node.js SDK</b> pointed at Anthropic's OpenAI-compatible endpoint.</p>
 <p>Datadog gets the telemetry through two paths:</p>
@@ -688,7 +688,7 @@ fetch(&#x27;/api/chat&#x27;, {
   headers: { &#x27;Content-Type&#x27;: &#x27;application/json&#x27; },
   body: JSON.stringify({ sessionId, messages }),
 })</code></pre></div>
-</section><section id="configure"><h2><span class="n">9</span>Configure and start</h2>
+</section><section id="configure"><h2><span class="n">9</span>Configure, start and stop</h2>
 <p><code>start.sh</code> starts the Agent, then the backend and frontend. These are the Datadog settings it sets for the backend:</p>
 <div class="code"><div class="code-title"><span>start.sh (Datadog section)</span><button class="copy">Copy</button></div><pre><code class="lang-bash">  # APM + log/trace correlation + runtime metrics via dd-trace -&gt; local Agent
   export DD_TRACE_AGENT_URL=&quot;http://localhost:8126&quot;
@@ -719,6 +719,48 @@ export DD_VERSION=1.0.0
 
 ./start.sh</code></pre></div>
 <div class="callout tip">In this repository <code>start.sh</code> reads both keys with a local <code>getSecretKey</code> helper. Replace those two lines with your own secret store, or export <code>ANTHROPIC_API_KEY</code> and <code>DD_API_KEY</code> and remove the <code>getSecretKey</code> calls.</div>
+<h4>Stop the stack</h4>
+<p><code>stop.sh</code> stops the backend and frontend, then the Datadog Agent container. The backend gets <code>SIGTERM</code> first, so pending OpenTelemetry spans are flushed to Datadog before it exits. Use <code>--keep-agent</code> to stop only the app, which is what Ctrl+C in the <code>start.sh</code> terminal does too.</p>
+<div class="code"><div class="code-title"><span>Shell</span><button class="copy">Copy</button></div><pre><code class="lang-bash">./stop.sh               # stop backend, frontend and the Datadog Agent
+./stop.sh --keep-agent  # stop the app, leave the Agent running</code></pre></div>
+<details><summary>Show stop.sh</summary><div class="code"><div class="code-title"><span>stop.sh</span><button class="copy">Copy</button></div><pre><code class="lang-bash">#!/usr/bin/env bash
+# Stops BitsTalk Deal Buddy: backend (:3001), frontend (:5173) and the Datadog Agent container.
+# Usage: ./stop.sh               stop everything
+#        ./stop.sh --keep-agent  stop the app, leave the Datadog Agent running
+set -euo pipefail
+
+ROOT=&quot;$(cd &quot;$(dirname &quot;$0&quot;)&quot; &amp;&amp; pwd)&quot;
+KEEP_AGENT=0
+[[ &quot;${1:-}&quot; == &quot;--keep-agent&quot; ]] &amp;&amp; KEEP_AGENT=1
+
+# Sends SIGTERM to whatever listens on the port (the backend flushes pending OTel spans on SIGTERM), waits up to 5s, then SIGKILLs.
+stop_port() {
+  local name=&quot;$1&quot; port=&quot;$2&quot; pids
+  pids=&quot;$(lsof -ti &quot;tcp:${port}&quot; -sTCP:LISTEN 2&gt;/dev/null || true)&quot;
+  if [[ -z &quot;$pids&quot; ]]; then
+    echo &quot;${name}: not running&quot;
+    return
+  fi
+  kill $pids 2&gt;/dev/null || true
+  for _ in $(seq 1 10); do
+    lsof -ti &quot;tcp:${port}&quot; -sTCP:LISTEN &gt;/dev/null 2&gt;&amp;1 || { echo &quot;${name}: stopped&quot;; return; }
+    sleep 0.5
+  done
+  kill -9 $(lsof -ti &quot;tcp:${port}&quot; -sTCP:LISTEN 2&gt;/dev/null) 2&gt;/dev/null || true
+  echo &quot;${name}: force-stopped&quot;
+}
+
+stop_port &quot;Backend  (:${PORT:-3001})&quot; &quot;${PORT:-3001}&quot;
+stop_port &quot;Frontend (:5173)&quot; 5173
+
+if [[ &quot;$KEEP_AGENT&quot; == 1 ]]; then
+  echo &quot;Datadog Agent: left running (stop it later with ./stop.sh or datadog/agent.sh down)&quot;
+elif docker info &gt;/dev/null 2&gt;&amp;1; then
+  printf &#x27;Datadog Agent: &#x27;
+  &quot;$ROOT/datadog/agent.sh&quot; down
+else
+  echo &quot;Datadog Agent: Docker is not running, nothing to stop&quot;
+fi</code></pre></div></details>
 </section><section id="verify"><h2><span class="n">10</span>Verify in Datadog</h2>
 <div class="code"><div class="code-title"><span>Local checks</span><button class="copy">Copy</button></div><pre><code class="lang-bash"># Agent is up and accepting traces
 curl -s http://localhost:8126/info | head -5

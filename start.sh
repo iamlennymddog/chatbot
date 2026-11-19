@@ -62,7 +62,7 @@ fi
 unset DD_API_KEY
 
 cleanup() {
-  echo "Stopping app (Datadog Agent keeps running; stop it with: datadog/agent.sh down)..."
+  echo "Stopping app (Datadog Agent keeps running; stop it with: ./stop.sh)..."
   kill "${BACKEND_PID:-}" "${FRONTEND_PID:-}" 2>/dev/null || true
   wait 2>/dev/null || true
 }
