@@ -1,0 +1,7 @@
+# Tail the backend's pino JSON log file. Trace/log correlation comes from the
+# dd.trace_id / dd.span_id fields that dd-trace injects (DD_LOGS_INJECTION=true).
+logs:
+  - type: file
+    path: /var/log/bitstalk-chatbot/app.log
+    service: bitstalk-deals-chatbot-api
+    source: nodejs

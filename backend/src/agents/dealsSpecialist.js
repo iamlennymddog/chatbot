@@ -19,6 +19,7 @@ Deals in catalogue: ${index.chunks.map((c) => c.id).join(', ')}`;
   return async function consult(task, ctx) {
     const result = await runAgent({
       name: 'deals-specialist',
+      description: 'Researches the BitsTalk deals catalogue and calculates contract costs',
       model: SPECIALIST_MODEL,
       system,
       messages: [{ role: 'user', content: task }],

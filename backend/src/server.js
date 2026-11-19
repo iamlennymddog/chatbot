@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import { otelEnabled, shutdownTracing } from './otel.js';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
@@ -44,7 +45,8 @@ app.get('/api/deals', (_req, res) => {
 });
 
 app.post('/api/chat', async (req, res) => {
-  const { messages, sessionId } = req.body || {};
+  const { messages } = req.body || {};
+  const sessionId = req.body?.sessionId ?? req.headers['x-session-id'] ?? randomUUID();
   const log = req.log.child({ session_id: sessionId });
 
   if (!Array.isArray(messages) || messages.length === 0 || messages.at(-1)?.role !== 'user') {
@@ -57,7 +59,7 @@ app.post('/api/chat', async (req, res) => {
     .map((m) => ({ role: m.role, content: m.content }));
   while (history.length && history[0].role !== 'user') history.shift();
 
-  const ctx = { log, steps: [], sources: new Map() };
+  const ctx = { log, sessionId, steps: [], sources: new Map() };
 
   try {
     const t0 = Date.now();
@@ -85,4 +87,18 @@ app.post('/api/chat', async (req, res) => {
   }
 });
 
-app.listen(PORT, () => logger.info({ port: PORT, orchestrator_model: ORCHESTRATOR_MODEL, specialist_model: SPECIALIST_MODEL }, `BitsTalk Deals chatbot API listening on :${PORT}`));
+const server = app.listen(PORT, () =>
+  logger.info(
+    { port: PORT, orchestrator_model: ORCHESTRATOR_MODEL, specialist_model: SPECIALIST_MODEL, otel_llmobs: otelEnabled },
+    `BitsTalk Deals chatbot API listening on :${PORT}`,
+  ),
+);
+
+// Flush pending OTel spans before exit.
+for (const signal of ['SIGINT', 'SIGTERM']) {
+  process.once(signal, async () => {
+    server.close();
+    await shutdownTracing();
+    process.exit(0);
+  });
+}

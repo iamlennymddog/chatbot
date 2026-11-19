@@ -47,6 +47,7 @@ export function createOrchestrator(index) {
   return function chat(messages, ctx) {
     return runAgent({
       name: 'deal-buddy',
+      description: 'Customer-facing BitsTalk deals assistant that delegates research to the Deals Specialist',
       model: ORCHESTRATOR_MODEL,
       system: SYSTEM,
       messages,
