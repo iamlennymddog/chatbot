@@ -1,4 +1,5 @@
 import { openai } from './client.js';
+import { traceSpan } from '../tracing.js';
 
 const MAX_ITERATIONS = 6;
 
@@ -6,61 +7,90 @@ const MAX_ITERATIONS = 6;
  * Generic tool-use loop on the OpenAI Chat Completions API.
  * tools: [{ definition: {name, description, input_schema}, handler: async (input, ctx) => any }]
  * ctx:   { log, steps, sources } shared across the whole request (all agents).
+ * sessionId: set only by the root (orchestrator) agent; nested agents/tools inherit it.
  */
-export async function runAgent({ name, model, system, messages, tools, ctx, maxTokens = 1024 }) {
+export async function runAgent({ name, model, system, messages, tools, ctx, sessionId, maxTokens = 1024 }) {
   const toolMap = new Map(tools.map((t) => [t.definition.name, t]));
   const log = ctx.log.child({ agent: name });
 
-  const convo = [{ role: 'system', content: system }, ...messages];
-  const toolDefs = tools.map((t) => ({
-    type: 'function',
-    function: {
-      name: t.definition.name,
-      description: t.definition.description,
-      parameters: t.definition.input_schema,
+  return traceSpan(
+    sessionId ? { kind: 'agent', name, sessionId } : { kind: 'agent', name },
+    async () => {
+      const convo = [{ role: 'system', content: system }, ...messages];
+      const toolDefs = tools.map((t) => ({
+        type: 'function',
+        function: {
+          name: t.definition.name,
+          description: t.definition.description,
+          parameters: t.definition.input_schema,
+        },
+      }));
+      const usage = { input_tokens: 0, output_tokens: 0 };
+      log.info({ event: 'agent.start', model }, `Agent ${name} started`);
+
+      for (let i = 1; i <= MAX_ITERATIONS; i++) {
+        const t0 = Date.now();
+        const response = await openai.chat.completions.create({
+          model,
+          max_tokens: maxTokens,
+          messages: convo,
+          tools: toolDefs,
+        });
+        const choice = response.choices[0];
+        usage.input_tokens += response.usage?.prompt_tokens ?? 0;
+        usage.output_tokens += response.usage?.completion_tokens ?? 0;
+        log.info(
+          {
+            event: 'agent.llm_call',
+            model: response.model,
+            iteration: i,
+            llm_ms: Date.now() - t0,
+            stop_reason: choice.finish_reason,
+            input_tokens: response.usage?.prompt_tokens,
+            output_tokens: response.usage?.completion_tokens,
+          },
+          `Agent ${name} LLM call ${i}`,
+        );
+
+        const toolCalls = choice.message.tool_calls ?? [];
+        if (choice.finish_reason !== 'tool_calls' || toolCalls.length === 0) {
+          const text = choice.message.content ?? '';
+          log.info({ event: 'agent.end', iterations: i, ...usage }, `Agent ${name} finished`);
+          return { text, usage, iterations: i };
+        }
+
+        convo.push(choice.message);
+        const results = await Promise.all(toolCalls.map((tc) => executeTool(tc, toolMap, ctx, log, name)));
+        convo.push(...results);
+      }
+
+      log.warn({ event: 'agent.max_iterations', ...usage }, `Agent ${name} hit max iterations`);
+      return { text: "Sorry, I couldn't complete that request. Please try rephrasing.", usage, iterations: MAX_ITERATIONS };
     },
-  }));
-  const usage = { input_tokens: 0, output_tokens: 0 };
-  log.info({ event: 'agent.start', model }, `Agent ${name} started`);
-
-  for (let i = 1; i <= MAX_ITERATIONS; i++) {
-    const t0 = Date.now();
-    const response = await openai.chat.completions.create({
-      model,
-      max_tokens: maxTokens,
-      messages: convo,
-      tools: toolDefs,
-    });
-    const choice = response.choices[0];
-    usage.input_tokens += response.usage?.prompt_tokens ?? 0;
-    usage.output_tokens += response.usage?.completion_tokens ?? 0;
-    log.info(
-      {
-        event: 'agent.llm_call',
-        model: response.model,
-        iteration: i,
-        llm_ms: Date.now() - t0,
-        stop_reason: choice.finish_reason,
-        input_tokens: response.usage?.prompt_tokens,
-        output_tokens: response.usage?.completion_tokens,
+    (result) => ({
+      inputData: messages.at(-1)?.content,
+      outputData: result.text,
+      metadata: { model, iterations: result.iterations },
+      metrics: { input_tokens: result.usage.input_tokens, output_tokens: result.usage.output_tokens },
+      tags: { agent: name },
+    }),
+    // Agent declaration -> metadata._dd.agent_manifest, which LLM Obs uses to draw the
+    // Execution Graph (agents, their tools, and which agent invoked which).
+    {
+      agent: {
+        name,
+        version: process.env.DD_VERSION,
+        instructions: system,
+        model,
+        modelSettings: { maxTokens },
+        tools: tools.map((t) => ({
+          name: t.definition.name,
+          description: t.definition.description,
+          parameters: t.definition.input_schema,
+        })),
       },
-      `Agent ${name} LLM call ${i}`,
-    );
-
-    const toolCalls = choice.message.tool_calls ?? [];
-    if (choice.finish_reason !== 'tool_calls' || toolCalls.length === 0) {
-      const text = choice.message.content ?? '';
-      log.info({ event: 'agent.end', iterations: i, ...usage }, `Agent ${name} finished`);
-      return { text, usage, iterations: i };
-    }
-
-    convo.push(choice.message);
-    const results = await Promise.all(toolCalls.map((tc) => executeTool(tc, toolMap, ctx, log, name)));
-    convo.push(...results);
-  }
-
-  log.warn({ event: 'agent.max_iterations', ...usage }, `Agent ${name} hit max iterations`);
-  return { text: "Sorry, I couldn't complete that request. Please try rephrasing.", usage, iterations: MAX_ITERATIONS };
+    },
+  );
 }
 
 async function executeTool(toolCall, toolMap, ctx, log, agentName) {
@@ -70,7 +100,15 @@ async function executeTool(toolCall, toolMap, ctx, log, agentName) {
   ctx.steps.push({ agent: agentName, tool: toolUse.name, input: toolUse.input });
   try {
     if (!tool) throw new Error(`Unknown tool ${toolUse.name}`);
-    const output = await tool.handler(toolUse.input, ctx);
+    const output = await traceSpan(
+      { kind: tool.kind || 'tool', name: toolUse.name },
+      () => tool.handler(toolUse.input, ctx),
+      (out) => ({
+        inputData: tool.kind === 'retrieval' ? toolUse.input.query : toolUse.input,
+        outputData: tool.spanOutput ? tool.spanOutput(out) : out,
+        tags: { agent: agentName },
+      }),
+    );
     log.info(
       { event: 'tool.call', tool: toolUse.name, tool_input: toolUse.input, tool_ms: Date.now() - t0, status: 'ok' },
       `Tool ${toolUse.name} executed`,

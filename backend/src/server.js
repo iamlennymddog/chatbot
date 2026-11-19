@@ -44,7 +44,8 @@ app.get('/api/deals', (_req, res) => {
 });
 
 app.post('/api/chat', async (req, res) => {
-  const { messages, sessionId } = req.body || {};
+  const { messages } = req.body || {};
+  const sessionId = req.body?.sessionId ?? req.headers['x-session-id'] ?? randomUUID();
   const log = req.log.child({ session_id: sessionId });
 
   if (!Array.isArray(messages) || messages.length === 0 || messages.at(-1)?.role !== 'user') {
@@ -57,7 +58,7 @@ app.post('/api/chat', async (req, res) => {
     .map((m) => ({ role: m.role, content: m.content }));
   while (history.length && history[0].role !== 'user') history.shift();
 
-  const ctx = { log, steps: [], sources: new Map() };
+  const ctx = { log, sessionId, steps: [], sources: new Map() };
 
   try {
     const t0 = Date.now();

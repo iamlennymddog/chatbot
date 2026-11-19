@@ -1,6 +1,7 @@
 // Tools available to the Deals Specialist sub-agent.
 export function createDealTools(index) {
   const searchDeals = {
+    kind: 'retrieval',
     definition: {
       name: 'search_deals',
       description:
@@ -24,6 +25,9 @@ export function createDealTools(index) {
       if (!hits.length) return 'No matching deals found. Try broader keywords.';
       return hits.map((h) => ({ id: h.chunk.id, score: Number(h.score.toFixed(3)), text: h.chunk.text }));
     },
+    // LLM Obs retrieval spans expect documents
+    spanOutput: (out) =>
+      Array.isArray(out) ? out.map((d) => ({ id: d.id, name: d.id, score: d.score, text: d.text })) : [],
   };
 
   const calculateContractCost = {

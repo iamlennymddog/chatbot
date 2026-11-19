@@ -33,5 +33,28 @@ The chat response includes `steps` (every tool call per agent), which the UI sho
 - `GET  /api/deals` – list of deal IDs/titles
 - `POST /api/chat` – `{ sessionId, messages: [{role, content}] }` → `{ reply, sources, steps, usage }`
 
+## Datadog instrumentation
+`./start.sh` reads `DD_API_KEY` with `getSecretKey BITSTALK_DD_API_KEY`, starts a dedicated Agent container (`datadog/agent.sh`, key in the 0600 file `.dd/datadog.env`) and runs the backend with `node --import dd-trace/initialize.mjs`.
+
+| Signal | How |
+|---|---|
+| APM | service `bitstalk-deals-chatbot-api`, env `pov`. Express, HTTP and the OpenAI SDK are auto-instrumented. |
+| LLM Observability | ml_app `bitstalk-deal-buddy`, sent through the Agent. OpenAI SDK calls produce `llm` spans; `src/tracing.js` adds `agent` / `tool` / `retrieval` spans and an agent manifest (instructions, model, tools) on each agent span for the **Execution Graph**. The chat `sessionId` is set on the root `deal-buddy` span only and is inherited by all children. |
+| Logs | pino JSON -> `backend/logs/app.log`, tailed by the Agent (`datadog/conf.d/bitstalk-chatbot.d`). `DD_LOGS_INJECTION=true` adds `dd.trace_id`/`dd.span_id`. |
+| Runtime metrics | `DD_RUNTIME_METRICS_ENABLED=true` via DogStatsD :8125 |
+
+Execution graph per chat turn:
+```
+agent: deal-buddy                       (session_id = chat sessionId)
+├─ llm: OpenAI.createChatCompletion (claude-sonnet-5-5)
+├─ tool: check_network_coverage
+└─ tool: consult_deals_specialist
+   └─ agent: deals-specialist
+      ├─ llm: OpenAI.createChatCompletion (claude-haiku-5-5)
+      ├─ retrieval: search_deals
+      └─ tool: calculate_contract_cost
+```
+Stop the Agent with `datadog/agent.sh down`.
+
 ## Log format
-Each line is JSON with `level` (string), `time` (ISO), `service`, `req.id`, `session_id`, plus `agent`, `event` (`agent.start`, `agent.llm_call`, `tool.call`, `rag.retrieve`, `agent.end`, `chat.completed`, `llm.error`) and timing/token fields.
+Each line is JSON with `level` (string), `time` (ISO), `service`, `env`, `version`, `req.id`, `session_id`, plus `agent`, `event` (`agent.start`, `agent.llm_call`, `tool.call`, `rag.retrieve`, `agent.end`, `chat.completed`, `llm.error`) and timing/token fields.

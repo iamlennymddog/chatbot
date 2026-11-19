@@ -5,11 +5,13 @@
   "type": "module",
   "main": "src/server.js",
   "scripts": {
-    "start": "node src/server.js",
-    "dev": "node --watch src/server.js"
+    "start": "node --import dd-trace/initialize.mjs src/server.js",
+    "dev": "node --watch src/server.js",
+    "start:no-dd": "node src/server.js"
   },
   "dependencies": {
     "cors": "^2.8.6",
+    "dd-trace": "^6.25.0",
     "dotenv": "^18.0.10",
     "express": "^5.3.0",
     "openai": "^7.57.0",

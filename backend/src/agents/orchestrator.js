@@ -52,6 +52,8 @@ export function createOrchestrator(index) {
       messages,
       tools,
       ctx,
+      // Root span of the trace: the chat session groups every turn under LLM Obs Sessions.
+      sessionId: ctx.sessionId,
     });
   };
 }
