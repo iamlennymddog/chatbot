@@ -15,6 +15,7 @@ Step-by-step guide: [`docs/datadog-instrumentation-guide.html`](docs/datadog-ins
 ```bash
 export ANTHROPIC_API_KEY=sk-ant-...
 ./start.sh           # backend :3001 + frontend http://localhost:5173
+./stop.sh            # stop backend and frontend (or Ctrl+C in the start.sh terminal)
 ```
 Optional overrides: `ANTHROPIC_MODEL`, `SPECIALIST_MODEL`.
 
