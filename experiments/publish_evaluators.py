@@ -11,23 +11,24 @@ TOOLS = "{{spans[meta.span.kind:tool]}}"
 BRIEF = "{{spans[name:deals-specialist].meta.output.value}}"
 CTX = "BitsTalk Deal Buddy is a customer-facing assistant for BitsTalk South Africa. It delegates catalogue research to a Deals Specialist sub-agent that uses search_deals (retrieval over the BitsTalk deals catalogue) and calculate_contract_cost; check_network_coverage checks coverage by location."
 
+# output_schema is a plain JSON schema (the format existing evaluators in the org use).
 def boolean(desc):
-    return ({"name": "boolean_eval", "strict": True, "schema": {"type": "object", "properties": {
+    return ({"type": "object", "properties": {
         "boolean_eval": {"type": "boolean", "description": desc},
         "reasoning": {"type": "string", "description": "Explanation for the evaluation"}},
-        "required": ["boolean_eval", "reasoning"], "additionalProperties": False}}, {"pass_when": True})
+        "required": ["boolean_eval", "reasoning"], "additionalProperties": False}, {"pass_when": True})
 
 def categorical(cats, passing):
-    return ({"name": "categorical_eval", "strict": True, "schema": {"type": "object", "properties": {
-        "categorical_eval": {"type": "string", "anyOf": [{"const": k, "description": v} for k, v in cats.items()]},
+    return ({"type": "object", "properties": {
+        "categorical_eval": {"anyOf": [{"const": k, "description": v} for k, v in cats.items()]},
         "reasoning": {"type": "string", "description": "Explanation for the category chosen"}},
-        "required": ["categorical_eval", "reasoning"], "additionalProperties": False}}, {"pass_values": passing})
+        "required": ["categorical_eval", "reasoning"], "additionalProperties": False}, {"pass_values": passing})
 
 def score(desc, lo, hi, thr):
-    return ({"name": "score_eval", "strict": True, "schema": {"type": "object", "properties": {
-        "score_eval": {"type": "number", "description": desc, "minimum": lo, "maximum": hi},
+    return ({"type": "object", "properties": {
+        "score_eval": {"type": "number", "description": f"{desc} ({lo} = worst, {hi} = best)"},
         "reasoning": {"type": "string", "description": "Explanation for the score"}},
-        "required": ["score_eval", "reasoning"], "additionalProperties": False}}, {"min_threshold": thr})
+        "required": ["score_eval", "reasoning"], "additionalProperties": False}, {"min_threshold": thr})
 
 EVALS = [
  ("catalogue_promo_stated_as_fact", "trace", ROOT_FILTER,
@@ -80,26 +81,47 @@ def payload(name, scope, flt, system, user, schema_crit):
     schema, crit = schema_crit
     return {"data": {"type": "evaluator_config", "id": name, "attributes": {
         "eval_name": name, "category": "Custom",
-        "llm_provider": {"integration_provider": "anthropic", "model_name": "claude-haiku-5-5"},
+        "llm_provider": {"integration_provider": "anthropic", "model_name": "claude-haiku-5-5",
+                         **({"integration_account_id": ACCOUNT_ID} if ACCOUNT_ID else {})},
         "llm_judge_config": {"inference_params": {"temperature": 0, "max_tokens": 1024},
             "parsing_type": "structured_output", "output_schema": schema, "assessment_criteria": crit,
             "prompt_template": [{"role": "system", "content": system}, {"role": "user", "content": user}]},
         "target": {"application_name": APP, "enabled": False, "eval_scope": scope, "filter": flt,
                    "root_spans_only": scope == "span", "sampling_percentage": 100}}}}
 
-def call(method, name, body=None):
-    req = urllib.request.Request(f"https://api.datadoghq.com/api/unstable/llm-obs/config/evaluators/custom/{name}",
+def call(method, name, body=None, full=False):
+    req = urllib.request.Request(f"https://api.datadoghq.com/api/unstable/llm-obs/config/evaluators/custom/{name}".rstrip("/"),
         data=json.dumps(body).encode() if body else None, method=method,
         headers={"DD-API-KEY": os.environ["DD_API_KEY"], "DD-APPLICATION-KEY": os.environ["DD_APP_KEY"], "Content-Type": "application/json"})
     try:
         with urllib.request.urlopen(req, timeout=30) as r:
-            return r.status, r.read().decode()[:300]
+            data = r.read().decode()
+            return r.status, data if full else data[:300]
     except urllib.error.HTTPError as e:
         return e.code, e.read().decode()[:400]
 
+def judge_account():
+    """Integration account of an existing evaluator on the same ml_app (judge LLM credentials)."""
+    status, body = call("GET", "", None, full=True)
+    if status != 200:
+        return None
+    for ev in json.loads(body).get("data", []):
+        attrs = ev.get("attributes", {})
+        if attrs.get("target", {}).get("application_name") == APP:
+            account = attrs.get("llm_provider", {}).get("integration_account_id")
+            if account:
+                return account
+    return None
+
+# Covered by an existing enabled evaluator on this ml_app (goal-completeness, trace scope).
+SKIP = {"goal_completion"}
+ACCOUNT_ID = judge_account()
+print("judge integration account:", ACCOUNT_ID or "none found - pick one in the UI before enabling")
 only = sys.argv[1:] 
 for e in EVALS:
     if only and e[0] not in only: continue
+    if e[0] in SKIP:
+        print(f"{e[0]}: skipped (covered by an existing evaluator)"); continue
     st, _ = call("GET", e[0])
     if st == 200:
         print(f"{e[0]}: EXISTS - skipped"); continue
