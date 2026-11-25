@@ -97,6 +97,7 @@ flow_diagram = """invoke_agent deal-buddy ─input→ chat(sonnet) ─output→ 
 steps = [
 ("overview", "How it fits together", f"""
 <p>The chatbot is a small multi-agent system: <b>Deal Buddy</b> (orchestrator, Claude Sonnet) delegates research to the <b>Deals Specialist</b> sub-agent (Claude Haiku), which calls tools. Both agents use the <b>OpenAI Node.js SDK</b> pointed at Anthropic's OpenAI-compatible endpoint.</p>
+<div class="callout tip"><b>Already have dd-trace (APM, logs) working in your own app?</b> Follow the shorter <a href="execution-graph-addon-guide.html">Execution Graph add-on guide</a> (<code>docs/execution-graph-addon-guide.html</code>) instead. It adds only the Execution Graph on top of your existing setup.</div>
 <p>Datadog gets the telemetry through two paths:</p>
 <figure class="diagram"><img src="data:image/png;base64,{flow_png}" alt="Telemetry flow from the BitsTalk Deal Buddy backend to Datadog"><figcaption>Full telemetry flow. Editable source: <code>docs/datadog-communication-flow.drawio</code> (open in <a href="https://app.diagrams.net">diagrams.net</a>).</figcaption></figure>
 <p>In short:</p>
@@ -108,7 +109,7 @@ steps = [
 <tr><td>Logs (correlated to traces)</td><td>pino JSON file → Datadog Agent</td><td>Logs</td></tr>
 <tr><td>Agent traces, sessions, <b>Execution Graph</b></td><td>OpenTelemetry GenAI → Datadog OTLP intake</td><td>LLM Observability, ml_app <code>bitstalk-deal-buddy</code></td></tr>
 </table>
-<div class="callout why"><b>Why OpenTelemetry for LLM Observability?</b> The Execution Graph draws its edges from <em>span links</em> between spans of the same trace (<code>{{from: "output", to: "input"}}</code>). The dd-trace Node.js LLM Observability SDK cannot create span links today, so agent, LLM and tool spans are emitted with OpenTelemetry using the GenAI semantic conventions. dd-trace stays in place for APM and logs, with its own LLM Observability switched <b>off</b> to avoid duplicate LLM spans.</div>
+<div class="callout why"><b>Why OpenTelemetry for LLM Observability?</b> The Execution Graph draws its edges from <em>span links</em> between spans of the same trace (<code>{{from: "output", to: "input"}}</code>). The dd-trace Node.js LLM Observability SDK cannot create span links today, so agent, LLM and tool spans are emitted with OpenTelemetry using the GenAI semantic conventions. dd-trace stays in place for APM and logs, with its own LLM Observability switched <b>off</b> to avoid duplicate LLM spans. Datadog docs: <a href="https://docs.datadoghq.com/llm_observability/instrument/otel_instrumentation/#span-links">OpenTelemetry Instrumentation → Span links</a>.</div>
 """),
 ("prereqs", "Prerequisites", f"""
 <ul class="check">
