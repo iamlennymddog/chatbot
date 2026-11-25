@@ -250,18 +250,19 @@ steps = [
 """),
 ]
 
-nav = "".join(f'<a href="#{sid}"><span class="n">{i}</span>{html.escape(t)}</a>' for i, (sid, t, _) in enumerate(steps))
-body = "".join(
-    f'<section id="{sid}"><h2><span class="n">{i}</span>{html.escape(t)}</h2>{content}</section>'
-    for i, (sid, t, content) in enumerate(steps)
-)
+def render(out, title, h1, intro, steps, footer):
+    nav = "".join(f'<a href="#{sid}"><span class="n">{i}</span>{html.escape(t)}</a>' for i, (sid, t, _) in enumerate(steps))
+    body = "".join(
+        f'<section id="{sid}"><h2><span class="n">{i}</span>{html.escape(t)}</h2>{content}</section>'
+        for i, (sid, t, content) in enumerate(steps)
+    )
 
-page = f"""<!doctype html>
+    page = f"""<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Datadog instrumentation guide — BitsTalk Deal Buddy</title>
+<title>{html.escape(title)}</title>
 <style>
 :root {{ --ink:#1f2330; --muted:#5b6170; --line:#e3e5ec; --bg:#f7f7fa; --purple:#632ca6; --purple-soft:#f1ebfa; --code:#1e1f29; --ok:#1d7a4f; --warn:#9a5b00; }}
 * {{ box-sizing:border-box; }}
@@ -319,14 +320,14 @@ footer {{ color:var(--muted); font-size:13px; padding:24px 40px; }}
 </head>
 <body>
 <header>
-<h1>Datadog instrumentation guide</h1>
-<p>Step by step: add APM, logs and LLM Observability — with a working <b>Execution Graph</b> for agents, sub-agents and tools — to the BitsTalk Deal Buddy Node.js agent (OpenAI SDK, Claude models).</p>
+<h1>{html.escape(h1)}</h1>
+<p>{intro}</p>
 </header>
 <div class="layout">
 <nav>{nav}</nav>
 <main>{body}</main>
 </div>
-<footer>Code samples are taken from the <code>main</code> branch of this repository. The uninstrumented version is on <code>no-instrumentation</code>.</footer>
+<footer>{footer}</footer>
 <script>
 document.querySelectorAll('.copy').forEach(function (b) {{
   b.addEventListener('click', function () {{
@@ -345,6 +346,266 @@ document.querySelectorAll('section').forEach(function (s) {{ obs.observe(s); }})
 </body>
 </html>
 """
-OUT.parent.mkdir(exist_ok=True)
-OUT.write_text(page)
-print(OUT, len(page))
+    out.parent.mkdir(exist_ok=True)
+    out.write_text(page)
+    print(out, len(page))
+
+render(
+    OUT,
+    "Datadog instrumentation guide — BitsTalk Deal Buddy",
+    "Datadog instrumentation guide",
+    "Step by step: add APM, logs and LLM Observability — with a working <b>Execution Graph</b> for agents, sub-agents and tools — to the BitsTalk Deal Buddy Node.js agent (OpenAI SDK, Claude models).",
+    steps,
+    "Code samples are taken from the <code>main</code> branch of this repository. The uninstrumented version is on <code>no-instrumentation</code>.",
+)
+
+# ---------------------------------------------------------------------------------------------
+# Add-on guide: Execution Graph for an app that already has dd-trace (APM, logs) working.
+# ---------------------------------------------------------------------------------------------
+EG_OUT = ROOT / "docs" / "execution-graph-addon-guide.html"
+
+eg_start_env = between("start.sh", "  # dd-trace's own LLM Obs stays OFF", '  export OTEL_SERVICE_NAME="${DD_LLMOBS_ML_APP:-bitstalk-deal-buddy}"')
+eg_install = """npm install \\
+  @opentelemetry/api@~1.9.0 \\
+  @opentelemetry/sdk-trace-node @opentelemetry/sdk-trace-base \\
+  @opentelemetry/resources \\
+  @opentelemetry/exporter-trace-otlp-proto @opentelemetry/exporter-trace-otlp-http"""
+eg_skeleton = """import { withSpan, flow, json, genAiMessages, activeSpan, SpanKind } from './tracing.js';
+
+export async function runAgent({ name, model, messages, tools, sessionId }) {
+  const caller = activeSpan(); // the hand-off tool's span when this agent runs as a sub-agent
+
+  // 1. Agent span. A sub-agent links its input to the tool that called it.
+  return withSpan(`invoke_agent ${name}`, {
+    attributes: {
+      'gen_ai.operation.name': 'invoke_agent',
+      'gen_ai.agent.name': name,
+      'gen_ai.conversation.id': sessionId,
+      'gen_ai.input.messages': genAiMessages(messages.slice(-1)),
+    },
+    links: caller ? [flow(caller.spanContext(), 'input', 'input')] : [],
+  }, async (agentSpan) => {
+    let inputs = [flow(agentSpan.spanContext(), 'input', 'input')]; // first model call reads the agent input
+
+    while (true) {
+      // 2. LLM span around YOUR existing model call, linked to whatever fed it.
+      const { message, chatSpan } = await withSpan(`chat ${model}`, {
+        kind: SpanKind.CLIENT,
+        attributes: {
+          'gen_ai.operation.name': 'chat',
+          'gen_ai.request.model': model,
+          'gen_ai.conversation.id': sessionId,
+          'gen_ai.input.messages': genAiMessages(messages),
+        },
+        links: inputs,
+      }, async (span) => {
+        const response = await callYourModel(messages, tools);           // unchanged
+        const message = response.choices[0].message;
+        span.setAttributes({
+          'gen_ai.usage.input_tokens': response.usage?.prompt_tokens ?? 0,
+          'gen_ai.usage.output_tokens': response.usage?.completion_tokens ?? 0,
+          'gen_ai.output.messages': genAiMessages([message]),
+        });
+        return { message, chatSpan: span.spanContext() };
+      });
+
+      // 4. Done: the last model call's output is the agent's output (and the caller tool's output).
+      if (!message.tool_calls?.length) {
+        agentSpan.addLink(flow(chatSpan, 'output', 'output'));
+        caller?.addLink(flow(agentSpan.spanContext(), 'output', 'output'));
+        agentSpan.setAttribute('gen_ai.output.messages', genAiMessages([message]));
+        return message.content;
+      }
+
+      // 3. Tool spans, each linked to the model call that requested it.
+      messages.push(message);
+      const results = await Promise.all(message.tool_calls.map((tc) =>
+        withSpan(`execute_tool ${tc.function.name}`, {
+          attributes: {
+            'gen_ai.operation.name': 'execute_tool',
+            'gen_ai.tool.name': tc.function.name,
+            'gen_ai.tool.call.id': tc.id,
+            'gen_ai.tool.call.arguments': tc.function.arguments,
+          },
+          links: [flow(chatSpan, 'output', 'input')],
+        }, async (span) => {
+          const content = await runYourTool(tc);                         // unchanged; may call runAgent()
+          span.setAttribute('gen_ai.tool.call.result', json(content));
+          return { spanContext: span.spanContext(), reply: { role: 'tool', tool_call_id: tc.id, content } };
+        })));
+
+      messages.push(...results.map((r) => r.reply));
+      inputs = results.map((r) => flow(r.spanContext, 'output', 'input')); // tool results feed the next call
+    }
+  });
+}"""
+eg_server = """// your entry point (server.js / index.js)
+import { shutdownTracing } from './otel.js';   // first application import
+// ... the rest of your imports and app
+
+for (const signal of ['SIGINT', 'SIGTERM']) {
+  process.once(signal, async () => {
+    await shutdownTracing();                    // flush pending LLM Observability spans
+    process.exit(0);
+  });
+}"""
+eg_env = """# Keep what you already have for dd-trace (DD_SERVICE, DD_ENV, DD_VERSION, DD_AGENT_HOST, DD_LOGS_INJECTION, ...)
+
+# 1. Switch dd-trace's own LLM Observability off (otherwise every model call appears twice)
+unset DD_LLMOBS_ENABLED                          # and remove DD_LLMOBS_ML_APP / DD_LLMOBS_AGENTLESS_ENABLED
+
+# 2. Send OpenTelemetry GenAI spans straight to Datadog's OTLP intake
+export DD_SITE=datadoghq.com                     # your site: datadoghq.eu, us3.datadoghq.com, ...
+export OTEL_EXPORTER_OTLP_TRACES_ENDPOINT="https://otlp.${DD_SITE}/v1/traces"
+export OTEL_EXPORTER_OTLP_TRACES_PROTOCOL="http/protobuf"
+export OTEL_EXPORTER_OTLP_TRACES_HEADERS="dd-api-key=${DD_API_KEY},dd-otlp-source=llmobs,DD-LLMObs-Enabled=true"
+export OTEL_SERVICE_NAME="my-agent"              # becomes the LLM Observability ml_app"""
+eg_k8s = """# Kubernetes: container env (the API key comes from a Secret; $(DD_API_KEY) expands the variable above it)
+env:
+  - name: DD_API_KEY
+    valueFrom:
+      secretKeyRef: { name: datadog-secret, key: api-key }
+  - name: OTEL_EXPORTER_OTLP_TRACES_ENDPOINT
+    value: "https://otlp.datadoghq.com/v1/traces"
+  - name: OTEL_EXPORTER_OTLP_TRACES_PROTOCOL
+    value: "http/protobuf"
+  - name: OTEL_EXPORTER_OTLP_TRACES_HEADERS
+    value: "dd-api-key=$(DD_API_KEY),dd-otlp-source=llmobs,DD-LLMObs-Enabled=true"
+  - name: OTEL_SERVICE_NAME
+    value: "my-agent"
+  # no DD_LLMOBS_ENABLED"""
+eg_verify = """# The app logs one line per OTLP export batch (from otel.js)
+grep '"event":"otel.export"' <your log file> | tail -3
+#   status "ok"     -> spans reached Datadog
+#   status "error"  -> 401/403: wrong API key or DD_SITE; network error: no egress to otlp.<site>:443"""
+
+eg_steps = [
+("before", "Before you start", f"""
+<p>This guide is for a Node.js agent that already sends <b>APM traces and logs</b> to Datadog with <code>dd-trace</code>, but has no <b>Execution Graph</b> in LLM Observability. It adds the graph on top, without touching the APM and log setup.</p>
+<table>
+<tr><th>Stays as it is</th><th>Changes</th></tr>
+<tr><td>
+<ul>
+<li><code>dd-trace</code>, loaded with <code>--import dd-trace/initialize.mjs</code></li>
+<li>The Datadog Agent, APM traces, runtime metrics</li>
+<li>Log collection and log/trace correlation</li>
+<li>Your LLM client, tools and agent logic</li>
+</ul></td><td>
+<ul>
+<li>dd-trace's own LLM Observability is switched <b>off</b></li>
+<li>LLM Observability spans come from <b>OpenTelemetry</b> instead, sent straight to Datadog's OTLP intake</li>
+<li>Two small files are added (<code>otel.js</code>, <code>tracing.js</code>)</li>
+<li>Your agent loop gets three kinds of spans and the links between them</li>
+</ul></td></tr>
+</table>
+<div class="callout why"><b>Why the switch?</b> The Execution Graph draws its edges from <em>span links</em> between spans of the same trace, each link saying how data flowed (<code>{{from: "output", to: "input"}}</code>). The dd-trace Node.js LLM Observability SDK cannot create span links today; OpenTelemetry can. dd-trace stays in place for everything else. Datadog docs: <a href="https://docs.datadoghq.com/llm_observability/instrument/otel_instrumentation/#span-links">OpenTelemetry Instrumentation → Span links</a>.</div>
+<h4>Trade-offs to know about</h4>
+<ul>
+<li><b>No <code>tracer.llmobs</code> APIs.</b> With dd-trace's LLM Observability off, <code>llmobs.trace()</code>, <code>llmobs.annotate()</code> and prompt management (<code>tracer.llmobs.prompts.getPrompt</code>) can't be used. Prompt <em>tracking</em> still works through an OpenTelemetry attribute (see step 6).</li>
+<li><b>LLM spans are created by hand.</b> The OpenAI Node.js SDK emits no OpenTelemetry spans, so each model call is wrapped in a span (step 5). APM's automatic <code>openai.request</code> spans are unaffected.</li>
+<li><b>Slower to appear.</b> Spans sent over OTLP took 3–4 minutes to become searchable in LLM Observability in our tests, against about one minute for APM and logs.</li>
+</ul>
+<p>The working reference is this repository's <code>main</code> branch: <code>backend/src/otel.js</code>, <code>backend/src/tracing.js</code> and <code>backend/src/agents/runAgent.js</code>. The full guide, <code>docs/datadog-instrumentation-guide.html</code>, covers the same code with more detail.</p>
+"""),
+("llmobs-off", "Switch dd-trace's LLM Observability off", f"""
+<p>Remove <code>DD_LLMOBS_ENABLED</code> (and <code>DD_LLMOBS_ML_APP</code>, <code>DD_LLMOBS_AGENTLESS_ENABLED</code>) from the app's environment, wherever it is set: shell scripts, Dockerfile, Helm values, Kubernetes manifests. If both dd-trace and OpenTelemetry send LLM Observability data, every model call appears twice.</p>
+<p>If your code calls <code>llmobs.trace()</code>, <code>llmobs.wrap()</code> or <code>llmobs.annotate()</code>, replace those calls with the OpenTelemetry spans from step 5. They are the same places in your code: the agent run, each tool and each model call.</p>
+<div class="callout tip">Leave everything else in dd-trace alone. APM, the OpenAI integration's APM spans and <code>DD_LOGS_INJECTION</code> keep working with LLM Observability off.</div>
+"""),
+("install", "Install OpenTelemetry", f"""
+<p>In the app's directory (dd-trace is already installed):</p>
+{code(eg_install, "bash", "Shell")}
+<p>The packages are saved to <code>package.json</code>, so your normal build (<code>npm ci</code>) picks them up.</p>
+<div class="callout warn">Keep <code>@opentelemetry/api</code> inside the range your dd-trace version supports (dd-trace 6.25: <code>&gt;=1.4.1 &lt;1.11.0</code>; this repository uses <code>~1.9.0</code>). Check <code>npm ls @opentelemetry/api</code> if npm reports a peer-dependency conflict.</div>
+"""),
+("otel", "Add the OpenTelemetry setup", f"""
+<p>Copy <code>backend/src/otel.js</code> into your app unchanged. It:</p>
+<ul>
+<li>registers an OpenTelemetry tracer provider that exports to the OTLP endpoint from the environment (step 7),</li>
+<li>gives each LLM Observability trace the <b>same trace ID as the dd-trace request</b>, so <b>View in APM</b> and log correlation work from LLM Observability,</li>
+<li>logs every export result, because OpenTelemetry silently drops export errors (wrong key or site) by default.</li>
+</ul>
+<p>It uses the app's logger (<code>./logger.js</code>). Point that import at your own logger, or replace the <code>logger.info</code> / <code>logger.error</code> calls with <code>console</code>.</p>
+{details("Show otel.js", code(otel_js, "js", "backend/src/otel.js"))}
+<p>Import it first in your entry point and flush on shutdown, so the last spans are not lost when the process stops:</p>
+{code(eg_server, "js", "Your entry point")}
+"""),
+("helpers", "Add the span helpers", f"""
+<p>Copy <code>backend/src/tracing.js</code> unchanged. It provides:</p>
+<table>
+<tr><th>Helper</th><th>What it does</th></tr>
+<tr><td><code>withSpan(name, {{ attributes, links, kind }}, fn)</code></td><td>runs <code>fn</code> inside an active span, records errors, always ends the span</td></tr>
+<tr><td><code>flow(spanContext, from, to)</code></td><td>builds an Execution Graph link, e.g. <code>flow(chatSpan, 'output', 'input')</code></td></tr>
+<tr><td><code>activeSpan()</code></td><td>the current span: inside a tool handler, that's the tool span</td></tr>
+<tr><td><code>genAiMessages(messages)</code></td><td>converts OpenAI chat messages to the GenAI message format LLM Observability displays</td></tr>
+<tr><td><code>json(value)</code></td><td>stringifies and truncates long attribute values</td></tr>
+</table>
+{details("Show tracing.js", code(tracing_js, "js", "backend/src/tracing.js"))}
+"""),
+("loop", "Instrument the agent loop", f"""
+<p>This is the only step that touches your agent code. Datadog maps <code>gen_ai.operation.name</code> to the LLM Observability span kind, so you need three kinds of spans:</p>
+<table>
+<tr><th>Span</th><th><code>gen_ai.operation.name</code></th><th>Wraps</th></tr>
+<tr><td>agent</td><td><code>invoke_agent</code></td><td>one agent run (orchestrator or sub-agent)</td></tr>
+<tr><td>llm</td><td><code>chat</code></td><td>one model call</td></tr>
+<tr><td>tool</td><td><code>execute_tool</code></td><td>one tool call, including a tool that hands off to a sub-agent</td></tr>
+</table>
+<p>And these links, which become the graph's edges. Links are drawn only between spans of the <b>same trace</b>, and carry <code>from</code> / <code>to</code> attributes (<a href="https://docs.datadoghq.com/llm_observability/instrument/otel_instrumentation/#span-links">Datadog docs: Span links</a>):</p>
+<table>
+<tr><th>Link</th><th>Put it on</th></tr>
+<tr><td>agent <b>input → input</b> first model call</td><td>the first <code>chat</code> span</td></tr>
+<tr><td>model call <b>output → input</b> tool it requested</td><td>each <code>execute_tool</code> span</td></tr>
+<tr><td>tool <b>output → input</b> next model call</td><td>the next <code>chat</code> span (one link per tool)</td></tr>
+<tr><td>last model call <b>output → output</b> agent</td><td>the <code>invoke_agent</code> span, when the agent finishes</td></tr>
+<tr><td>hand-off tool <b>input → input</b> sub-agent, and sub-agent <b>output → output</b> hand-off tool</td><td>the sub-agent's <code>invoke_agent</code> span, and the hand-off tool span</td></tr>
+</table>
+<p>A typical tool-use loop with all of this in place looks like the sketch below. Only the <code>withSpan</code> wrappers and links are new; <code>callYourModel</code> and <code>runYourTool</code> stand for code you already have.</p>
+{code(eg_skeleton, "js", "Sketch: your agent loop with spans and links")}
+<div class="callout tip"><b>Sub-agents need no extra code.</b> When a tool handler calls <code>runAgent()</code>, <code>activeSpan()</code> returns that tool's span, so the sub-agent links itself to its caller in both directions. Because <code>withSpan</code> uses active spans, everything stays in one trace.</div>
+<p>The complete version in this repository adds model and provider names, the system prompt, tool definitions, token usage on the agent span, error handling and logging:</p>
+{details("Show backend/src/agents/runAgent.js", code(run_agent, "js", "backend/src/agents/runAgent.js"))}
+"""),
+("session", "Sessions and prompts", f"""
+<p><b>Sessions.</b> Set <code>gen_ai.conversation.id</code> to one ID per conversation on every agent and model span (the sketch passes <code>sessionId</code> through). All turns of a conversation then group into one LLM Observability session. If you already pass a session ID to <code>llmobs.trace()</code>, reuse that value.</p>
+<p><b>Prompt tracking (optional).</b> To see calls, tokens and latency per prompt version, add the attribute <code>_dd.ml_obs.prompt_tracking</code> to each <code>chat</code> span: a JSON string with <code>id</code>, <code>version</code>, <code>template</code> (or <code>chat_template</code>) and <code>variables</code>. This repository builds it with a small helper:</p>
+{code(prompts_js, "js", "backend/src/agents/prompts.js")}
+<p>Step 9 of the full guide shows how the agents define their versioned prompts.</p>
+"""),
+("configure", "Configure the deployment", f"""
+<p>The OpenTelemetry spans go <b>from the app straight to Datadog</b> over HTTPS, not through the Datadog Agent. The app needs a Datadog API key and outbound access to <code>otlp.&lt;your site&gt;</code> on port 443.</p>
+{code(eg_env, "bash", "Environment variables")}
+{code(eg_k8s, "yaml", "Kubernetes example")}
+<p>For comparison, this is how this repository's <code>start.sh</code> sets them:</p>
+{code(eg_start_env, "bash", "start.sh (excerpt)")}
+"""),
+("verify", "Verify", f"""
+{code(eg_verify, "bash", "Local check")}
+<p>Send a request that makes the agent call at least one tool, wait 3–4 minutes, then in Datadog (replace <code>app.datadoghq.com</code> with your site):</p>
+<ol class="verify">
+<li><a href="https://app.datadoghq.com/llm/traces">LLM Observability → Traces</a>, filter <code>@ml_app:&lt;OTEL_SERVICE_NAME&gt;</code>, open a trace and click <b>Execution Graph</b>. You should see the agent, its model calls and tools, and any sub-agent nested under its hand-off tool.</li>
+<li>In the same trace, click <b>View in APM</b>. Your existing APM trace for the request opens, and its <b>Logs</b> tab shows the request's logs.</li>
+<li>Check that each model call appears <b>once</b>. Two copies mean dd-trace's LLM Observability is still on (step 1).</li>
+</ol>
+"""),
+("troubleshoot", "Troubleshooting", """
+<table>
+<tr><th>Symptom</th><th>Cause and fix</th></tr>
+<tr><td>No traces in LLM Observability</td><td>Wait 3–4 minutes, then check the <code>otel.export</code> log lines. 401/403: wrong API key, or <code>DD_SITE</code> doesn't match your org. Network errors: the app has no egress to <code>otlp.&lt;site&gt;:443</code>.</td></tr>
+<tr><td>Traces appear but there is no <b>Execution Graph</b> button</td><td>The spans have no links, or the trace came from dd-trace's LLM Observability. Check that <code>DD_LLMOBS_ENABLED</code> is unset and that every <code>chat</code> and <code>execute_tool</code> span gets its <code>links</code>.</td></tr>
+<tr><td>The graph is missing edges, or a sub-agent floats on its own</td><td>A link is missing. Every model call after the first needs one link per tool result; a sub-agent must run inside its hand-off tool's <code>withSpan</code>, so that <code>activeSpan()</code> finds the tool.</td></tr>
+<tr><td>Every model call appears twice</td><td>dd-trace's LLM Observability is still on. Remove <code>DD_LLMOBS_ENABLED</code> everywhere it is set.</td></tr>
+<tr><td>Agent, model and tool spans are split across several traces</td><td>A span was started outside the active context, for example in a callback that lost the async context. Create spans with <code>withSpan</code> (it uses <code>startActiveSpan</code>) and <code>await</code> inside it.</td></tr>
+<tr><td><b>View in APM</b> finds no trace</td><td>The LLM Observability trace ID must equal the dd-trace trace ID. Check that <code>otel.js</code> passes <code>idGenerator: new DatadogTraceIdGenerator()</code>, is imported first, and that the app still starts with <code>--import dd-trace/initialize.mjs</code>.</td></tr>
+<tr><td>Each turn is its own session</td><td>Use the same <code>gen_ai.conversation.id</code> for every turn of a conversation.</td></tr>
+</table>
+"""),
+]
+
+render(
+    EG_OUT,
+    "Add the Execution Graph to a dd-trace Node.js agent",
+    "Add the Execution Graph to an existing dd-trace agent",
+    "For Node.js agents that already send APM traces and logs to Datadog with <code>dd-trace</code>: keep that setup and add LLM Observability's <b>Execution Graph</b> with OpenTelemetry GenAI spans.",
+    eg_steps,
+    "Code samples are taken from the <code>main</code> branch of this repository. Full guide: <code>docs/datadog-instrumentation-guide.html</code>.",
+)

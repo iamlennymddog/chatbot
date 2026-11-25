@@ -1,0 +1,681 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Add the Execution Graph to a dd-trace Node.js agent</title>
+<style>
+:root { --ink:#1f2330; --muted:#5b6170; --line:#e3e5ec; --bg:#f7f7fa; --purple:#632ca6; --purple-soft:#f1ebfa; --code:#1e1f29; --ok:#1d7a4f; --warn:#9a5b00; }
+* { box-sizing:border-box; }
+body { margin:0; font:16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; color:var(--ink); background:#fff; }
+header { background:linear-gradient(135deg,#3b1a6b,#632ca6); color:#fff; padding:40px 32px 32px; }
+header h1 { margin:0 0 8px; font-size:30px; }
+header p { margin:0; max-width:760px; opacity:.9; }
+.layout { display:grid; grid-template-columns:260px minmax(0,1fr); max-width:1200px; margin:0 auto; }
+nav { position:sticky; top:0; align-self:start; max-height:100vh; overflow:auto; padding:24px 16px; border-right:1px solid var(--line); }
+nav a { display:flex; gap:10px; align-items:center; padding:7px 10px; border-radius:6px; color:var(--ink); text-decoration:none; font-size:14px; }
+nav a:hover, nav a.active { background:var(--purple-soft); color:var(--purple); }
+.n { display:inline-flex; justify-content:center; align-items:center; min-width:24px; height:24px; border-radius:50%; background:var(--purple); color:#fff; font-size:12px; font-weight:600; }
+main { padding:8px 40px 80px; min-width:0; }
+section { padding-top:28px; border-bottom:1px solid var(--line); padding-bottom:20px; }
+h2 { display:flex; gap:12px; align-items:center; font-size:23px; margin:12px 0 14px; }
+h2 .n { min-width:32px; height:32px; font-size:15px; }
+h4 { margin:26px 0 6px; font-size:17px; }
+code { font:13.5px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background:var(--bg); padding:1px 5px; border-radius:4px; }
+.code { margin:14px 0 18px; border-radius:8px; overflow:hidden; border:1px solid #2c2d3a; }
+.code-title { display:flex; justify-content:space-between; align-items:center; background:#2c2d3a; color:#c9cbe0; font:12.5px ui-monospace, Menlo, monospace; padding:6px 12px; }
+.copy { background:transparent; border:1px solid #555870; color:#c9cbe0; border-radius:5px; font-size:12px; padding:2px 10px; cursor:pointer; }
+.copy:hover { background:#3d3f52; }
+pre { margin:0; background:var(--code); color:#e8e9f3; padding:14px 16px; overflow:auto; max-height:560px; }
+pre code { background:none; padding:0; color:inherit; font-size:13px; white-space:pre; }
+table { border-collapse:collapse; width:100%; margin:12px 0 16px; font-size:14.5px; }
+th, td { border:1px solid var(--line); padding:8px 10px; text-align:left; vertical-align:top; }
+th { background:var(--bg); }
+.callout { border-left:4px solid var(--purple); background:var(--purple-soft); padding:12px 16px; border-radius:6px; margin:16px 0; font-size:15px; }
+.callout.warn { border-color:var(--warn); background:#fff6e5; }
+.callout.tip { border-color:var(--ok); background:#eaf7f0; }
+details { margin:14px 0; }
+summary { cursor:pointer; color:var(--purple); font-weight:600; }
+ul.check { list-style:none; padding-left:0; }
+ul.check li::before { content:"✓ "; color:var(--ok); font-weight:700; }
+ol.verify li { margin-bottom:8px; }
+a { color:var(--purple); }
+.arch { display:grid; grid-template-columns:1fr 1.3fr 1fr; gap:14px; align-items:center; margin:18px 0; }
+.arch-col { display:flex; flex-direction:column; gap:12px; }
+.arch-box { border-radius:10px; padding:14px; text-align:center; font-weight:600; border:2px solid; }
+.arch-box small { display:block; font-weight:400; font-size:12.5px; color:var(--muted); margin-top:4px; }
+.arch-box.app { border-color:#3a7bd5; background:#eef4fd; }
+.arch-box.agent { border-color:#7a7f8f; background:#f3f4f7; }
+.arch-box.dd { border-color:var(--purple); background:var(--purple-soft); }
+.arrow { position:relative; background:#fafbfc; border:1px dashed #b9bdc9; border-radius:8px; padding:6px 12px 6px 12px; font-size:13px; color:var(--muted); }
+.arrow span { display:block; font-weight:700; color:var(--ink); }
+.arrow::after { content:"→"; position:absolute; right:-16px; top:50%; transform:translateY(-50%); color:#7a7f8f; font-size:18px; }
+.arrow.otel { border-color:var(--purple); }
+.arrow.otel span { color:var(--purple); }
+figure.diagram { margin:16px 0; }
+figure.diagram img { width:100%; border:1px solid var(--line); border-radius:8px; }
+figure.diagram figcaption { font-size:13px; color:var(--muted); margin-top:6px; }
+footer { color:var(--muted); font-size:13px; padding:24px 40px; }
+@media (max-width:900px) { .layout { grid-template-columns:1fr; } nav { position:static; max-height:none; border-right:0; border-bottom:1px solid var(--line); } main { padding:8px 18px 60px; } .arch { grid-template-columns:1fr; } .arrow::after { content:"↓"; right:auto; left:50%; top:auto; bottom:-20px; } }
+</style>
+</head>
+<body>
+<header>
+<h1>Add the Execution Graph to an existing dd-trace agent</h1>
+<p>For Node.js agents that already send APM traces and logs to Datadog with <code>dd-trace</code>: keep that setup and add LLM Observability's <b>Execution Graph</b> with OpenTelemetry GenAI spans.</p>
+</header>
+<div class="layout">
+<nav><a href="#before"><span class="n">0</span>Before you start</a><a href="#llmobs-off"><span class="n">1</span>Switch dd-trace&#x27;s LLM Observability off</a><a href="#install"><span class="n">2</span>Install OpenTelemetry</a><a href="#otel"><span class="n">3</span>Add the OpenTelemetry setup</a><a href="#helpers"><span class="n">4</span>Add the span helpers</a><a href="#loop"><span class="n">5</span>Instrument the agent loop</a><a href="#session"><span class="n">6</span>Sessions and prompts</a><a href="#configure"><span class="n">7</span>Configure the deployment</a><a href="#verify"><span class="n">8</span>Verify</a><a href="#troubleshoot"><span class="n">9</span>Troubleshooting</a></nav>
+<main><section id="before"><h2><span class="n">0</span>Before you start</h2>
+<p>This guide is for a Node.js agent that already sends <b>APM traces and logs</b> to Datadog with <code>dd-trace</code>, but has no <b>Execution Graph</b> in LLM Observability. It adds the graph on top, without touching the APM and log setup.</p>
+<table>
+<tr><th>Stays as it is</th><th>Changes</th></tr>
+<tr><td>
+<ul>
+<li><code>dd-trace</code>, loaded with <code>--import dd-trace/initialize.mjs</code></li>
+<li>The Datadog Agent, APM traces, runtime metrics</li>
+<li>Log collection and log/trace correlation</li>
+<li>Your LLM client, tools and agent logic</li>
+</ul></td><td>
+<ul>
+<li>dd-trace's own LLM Observability is switched <b>off</b></li>
+<li>LLM Observability spans come from <b>OpenTelemetry</b> instead, sent straight to Datadog's OTLP intake</li>
+<li>Two small files are added (<code>otel.js</code>, <code>tracing.js</code>)</li>
+<li>Your agent loop gets three kinds of spans and the links between them</li>
+</ul></td></tr>
+</table>
+<div class="callout why"><b>Why the switch?</b> The Execution Graph draws its edges from <em>span links</em> between spans of the same trace, each link saying how data flowed (<code>{from: "output", to: "input"}</code>). The dd-trace Node.js LLM Observability SDK cannot create span links today; OpenTelemetry can. dd-trace stays in place for everything else. Datadog docs: <a href="https://docs.datadoghq.com/llm_observability/instrument/otel_instrumentation/#span-links">OpenTelemetry Instrumentation → Span links</a>.</div>
+<h4>Trade-offs to know about</h4>
+<ul>
+<li><b>No <code>tracer.llmobs</code> APIs.</b> With dd-trace's LLM Observability off, <code>llmobs.trace()</code>, <code>llmobs.annotate()</code> and prompt management (<code>tracer.llmobs.prompts.getPrompt</code>) can't be used. Prompt <em>tracking</em> still works through an OpenTelemetry attribute (see step 6).</li>
+<li><b>LLM spans are created by hand.</b> The OpenAI Node.js SDK emits no OpenTelemetry spans, so each model call is wrapped in a span (step 5). APM's automatic <code>openai.request</code> spans are unaffected.</li>
+<li><b>Slower to appear.</b> Spans sent over OTLP took 3–4 minutes to become searchable in LLM Observability in our tests, against about one minute for APM and logs.</li>
+</ul>
+<p>The working reference is this repository's <code>main</code> branch: <code>backend/src/otel.js</code>, <code>backend/src/tracing.js</code> and <code>backend/src/agents/runAgent.js</code>. The full guide, <code>docs/datadog-instrumentation-guide.html</code>, covers the same code with more detail.</p>
+</section><section id="llmobs-off"><h2><span class="n">1</span>Switch dd-trace&#x27;s LLM Observability off</h2>
+<p>Remove <code>DD_LLMOBS_ENABLED</code> (and <code>DD_LLMOBS_ML_APP</code>, <code>DD_LLMOBS_AGENTLESS_ENABLED</code>) from the app's environment, wherever it is set: shell scripts, Dockerfile, Helm values, Kubernetes manifests. If both dd-trace and OpenTelemetry send LLM Observability data, every model call appears twice.</p>
+<p>If your code calls <code>llmobs.trace()</code>, <code>llmobs.wrap()</code> or <code>llmobs.annotate()</code>, replace those calls with the OpenTelemetry spans from step 5. They are the same places in your code: the agent run, each tool and each model call.</p>
+<div class="callout tip">Leave everything else in dd-trace alone. APM, the OpenAI integration's APM spans and <code>DD_LOGS_INJECTION</code> keep working with LLM Observability off.</div>
+</section><section id="install"><h2><span class="n">2</span>Install OpenTelemetry</h2>
+<p>In the app's directory (dd-trace is already installed):</p>
+<div class="code"><div class="code-title"><span>Shell</span><button class="copy">Copy</button></div><pre><code class="lang-bash">npm install \
+  @opentelemetry/api@~1.9.0 \
+  @opentelemetry/sdk-trace-node @opentelemetry/sdk-trace-base \
+  @opentelemetry/resources \
+  @opentelemetry/exporter-trace-otlp-proto @opentelemetry/exporter-trace-otlp-http</code></pre></div>
+<p>The packages are saved to <code>package.json</code>, so your normal build (<code>npm ci</code>) picks them up.</p>
+<div class="callout warn">Keep <code>@opentelemetry/api</code> inside the range your dd-trace version supports (dd-trace 6.25: <code>&gt;=1.4.1 &lt;1.11.0</code>; this repository uses <code>~1.9.0</code>). Check <code>npm ls @opentelemetry/api</code> if npm reports a peer-dependency conflict.</div>
+</section><section id="otel"><h2><span class="n">3</span>Add the OpenTelemetry setup</h2>
+<p>Copy <code>backend/src/otel.js</code> into your app unchanged. It:</p>
+<ul>
+<li>registers an OpenTelemetry tracer provider that exports to the OTLP endpoint from the environment (step 7),</li>
+<li>gives each LLM Observability trace the <b>same trace ID as the dd-trace request</b>, so <b>View in APM</b> and log correlation work from LLM Observability,</li>
+<li>logs every export result, because OpenTelemetry silently drops export errors (wrong key or site) by default.</li>
+</ul>
+<p>It uses the app's logger (<code>./logger.js</code>). Point that import at your own logger, or replace the <code>logger.info</code> / <code>logger.error</code> calls with <code>console</code>.</p>
+<details><summary>Show otel.js</summary><div class="code"><div class="code-title"><span>backend/src/otel.js</span><button class="copy">Copy</button></div><pre><code class="lang-js">// OpenTelemetry GenAI tracing for Datadog LLM Observability (Agent Observability).
+//
+// Why OTel and not the dd-trace LLM Obs SDK: the Execution Graph draws its edges from span
+// links between spans of the same trace, which dd-trace JS cannot emit. OTel can.
+//
+// - src/agents/runAgent.js creates `invoke_agent`, `chat` and `execute_tool` spans plus the links
+//   (the OpenAI SDK has no native OTel instrumentation, so chat spans are created by hand).
+// - Export goes straight to Datadog&#x27;s OTLP intake with LLM Obs conversion enabled
+//   (OTEL_EXPORTER_OTLP_TRACES_ENDPOINT / _HEADERS, set by start.sh). service.name -&gt; ml_app.
+// - LLM Obs traces reuse the dd-trace (APM) trace ID of the current request, so a trace opened in
+//   LLM Observability links to its APM trace (&quot;View in APM&quot;) and to the correlated logs.
+import ddTracer from &#x27;dd-trace&#x27;;
+import { NodeTracerProvider } from &#x27;@opentelemetry/sdk-trace-node&#x27;;
+import { BatchSpanProcessor, RandomIdGenerator } from &#x27;@opentelemetry/sdk-trace-base&#x27;;
+import { resourceFromAttributes } from &#x27;@opentelemetry/resources&#x27;;
+import { OTLPTraceExporter as OTLPProtoExporter } from &#x27;@opentelemetry/exporter-trace-otlp-proto&#x27;;
+import { OTLPTraceExporter as OTLPJsonExporter } from &#x27;@opentelemetry/exporter-trace-otlp-http&#x27;;
+import { logger } from &#x27;./logger.js&#x27;;
+
+/**
+ * New OTel traces take the 128-bit trace ID of the active dd-trace span (the HTTP request), which is
+ * also the dd.trace_id injected into every log line. Falls back to a random ID outside a request or
+ * when dd-trace isn&#x27;t loaded.
+ */
+class DatadogTraceIdGenerator {
+  #random = new RandomIdGenerator();
+
+  generateTraceId() {
+    const ddContext = ddTracer.scope().active()?.context();
+    return ddContext ? ddContext.toTraceId(true) : this.#random.generateTraceId();
+  }
+
+  generateSpanId() {
+    return this.#random.generateSpanId();
+  }
+}
+
+/** Logs every OTLP export result: OTel swallows exporter errors (bad key, wrong endpoint) by default. */
+class LoggingExporter {
+  constructor(inner, endpoint) {
+    this.inner = inner;
+    this.endpoint = endpoint;
+  }
+
+  export(spans, resultCallback) {
+    this.inner.export(spans, (result) =&gt; {
+      if (result.code === 0) {
+        logger.info({ event: &#x27;otel.export&#x27;, status: &#x27;ok&#x27;, spans: spans.length, endpoint: this.endpoint }, &#x27;OTLP export succeeded&#x27;);
+      } else {
+        logger.error(
+          { event: &#x27;otel.export&#x27;, status: &#x27;error&#x27;, spans: spans.length, endpoint: this.endpoint, err: result.error },
+          &#x27;OTLP export failed&#x27;,
+        );
+      }
+      resultCallback(result);
+    });
+  }
+
+  shutdown() {
+    return this.inner.shutdown();
+  }
+
+  forceFlush() {
+    return this.inner.forceFlush?.() ?? Promise.resolve();
+  }
+}
+
+export const otelEnabled = Boolean(process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT);
+
+const spanProcessors = [];
+if (otelEnabled) {
+  const json = process.env.OTEL_EXPORTER_OTLP_TRACES_PROTOCOL === &#x27;http/json&#x27;;
+  const exporter = json ? new OTLPJsonExporter() : new OTLPProtoExporter();
+  spanProcessors.push(new BatchSpanProcessor(new LoggingExporter(exporter, process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT)));
+}
+
+export const provider = new NodeTracerProvider({
+  idGenerator: new DatadogTraceIdGenerator(),
+  resource: resourceFromAttributes({
+    &#x27;service.name&#x27;: process.env.OTEL_SERVICE_NAME || &#x27;bitstalk-deal-buddy&#x27;,
+    &#x27;service.version&#x27;: process.env.DD_VERSION || &#x27;1.0.0&#x27;,
+    &#x27;deployment.environment.name&#x27;: process.env.DD_ENV || &#x27;pov&#x27;,
+    dd_llmobs_enabled: true,
+  }),
+  spanProcessors,
+});
+provider.register();
+
+export async function shutdownTracing() {
+  await provider.shutdown().catch(() =&gt; {});
+}</code></pre></div></details>
+<p>Import it first in your entry point and flush on shutdown, so the last spans are not lost when the process stops:</p>
+<div class="code"><div class="code-title"><span>Your entry point</span><button class="copy">Copy</button></div><pre><code class="lang-js">// your entry point (server.js / index.js)
+import { shutdownTracing } from &#x27;./otel.js&#x27;;   // first application import
+// ... the rest of your imports and app
+
+for (const signal of [&#x27;SIGINT&#x27;, &#x27;SIGTERM&#x27;]) {
+  process.once(signal, async () =&gt; {
+    await shutdownTracing();                    // flush pending LLM Observability spans
+    process.exit(0);
+  });
+}</code></pre></div>
+</section><section id="helpers"><h2><span class="n">4</span>Add the span helpers</h2>
+<p>Copy <code>backend/src/tracing.js</code> unchanged. It provides:</p>
+<table>
+<tr><th>Helper</th><th>What it does</th></tr>
+<tr><td><code>withSpan(name, { attributes, links, kind }, fn)</code></td><td>runs <code>fn</code> inside an active span, records errors, always ends the span</td></tr>
+<tr><td><code>flow(spanContext, from, to)</code></td><td>builds an Execution Graph link, e.g. <code>flow(chatSpan, 'output', 'input')</code></td></tr>
+<tr><td><code>activeSpan()</code></td><td>the current span: inside a tool handler, that's the tool span</td></tr>
+<tr><td><code>genAiMessages(messages)</code></td><td>converts OpenAI chat messages to the GenAI message format LLM Observability displays</td></tr>
+<tr><td><code>json(value)</code></td><td>stringifies and truncates long attribute values</td></tr>
+</table>
+<details><summary>Show tracing.js</summary><div class="code"><div class="code-title"><span>backend/src/tracing.js</span><button class="copy">Copy</button></div><pre><code class="lang-js">// GenAI semantic-convention spans + span links for the LLM Obs Execution Graph.
+// Span kinds come from gen_ai.operation.name: invoke_agent -&gt; agent, execute_tool -&gt; tool,
+// chat -&gt; llm. Links carry {from, to} to describe data flow between spans of one trace.
+import { trace, context, SpanKind, SpanStatusCode } from &#x27;@opentelemetry/api&#x27;;
+import { provider } from &#x27;./otel.js&#x27;;
+
+const tracer = provider.getTracer(&#x27;bitstalk-deal-buddy&#x27;);
+const MAX_ATTR = 8000;
+
+export const flow = (spanContext, from, to) =&gt; ({ context: spanContext, attributes: { from, to } });
+export const json = (value) =&gt; {
+  const s = typeof value === &#x27;string&#x27; ? value : JSON.stringify(value);
+  return s.length &gt; MAX_ATTR ? `${s.slice(0, MAX_ATTR)}…` : s;
+};
+
+const parseArgs = (args) =&gt; {
+  try {
+    return args ? JSON.parse(args) : {};
+  } catch {
+    return args;
+  }
+};
+
+/** OpenAI chat messages -&gt; GenAI semconv messages (role + typed parts). */
+export function genAiMessages(messages) {
+  return json(
+    messages.map((m) =&gt; {
+      if (m.role === &#x27;tool&#x27;) {
+        return { role: &#x27;tool&#x27;, parts: [{ type: &#x27;tool_call_response&#x27;, id: m.tool_call_id, response: m.content }] };
+      }
+      const parts = [];
+      if (m.content) parts.push({ type: &#x27;text&#x27;, content: String(m.content) });
+      for (const tc of m.tool_calls ?? []) {
+        parts.push({ type: &#x27;tool_call&#x27;, id: tc.id, name: tc.function.name, arguments: parseArgs(tc.function.arguments) });
+      }
+      return { role: m.role, parts, ...(m.finish_reason ? { finish_reason: m.finish_reason } : {}) };
+    }),
+  );
+}
+
+export const activeSpan = () =&gt; trace.getSpan(context.active());
+
+/** Run fn inside an active span; records errors and always ends the span. */
+export function withSpan(name, { attributes = {}, links = [], kind = SpanKind.INTERNAL } = {}, fn) {
+  return tracer.startActiveSpan(name, { attributes, links, kind }, async (span) =&gt; {
+    try {
+      return await fn(span);
+    } catch (err) {
+      span.recordException(err);
+      span.setStatus({ code: SpanStatusCode.ERROR, message: err.message });
+      throw err;
+    } finally {
+      span.end();
+    }
+  });
+}
+
+export { SpanKind, SpanStatusCode };</code></pre></div></details>
+</section><section id="loop"><h2><span class="n">5</span>Instrument the agent loop</h2>
+<p>This is the only step that touches your agent code. Datadog maps <code>gen_ai.operation.name</code> to the LLM Observability span kind, so you need three kinds of spans:</p>
+<table>
+<tr><th>Span</th><th><code>gen_ai.operation.name</code></th><th>Wraps</th></tr>
+<tr><td>agent</td><td><code>invoke_agent</code></td><td>one agent run (orchestrator or sub-agent)</td></tr>
+<tr><td>llm</td><td><code>chat</code></td><td>one model call</td></tr>
+<tr><td>tool</td><td><code>execute_tool</code></td><td>one tool call, including a tool that hands off to a sub-agent</td></tr>
+</table>
+<p>And these links, which become the graph's edges. Links are drawn only between spans of the <b>same trace</b>, and carry <code>from</code> / <code>to</code> attributes (<a href="https://docs.datadoghq.com/llm_observability/instrument/otel_instrumentation/#span-links">Datadog docs: Span links</a>):</p>
+<table>
+<tr><th>Link</th><th>Put it on</th></tr>
+<tr><td>agent <b>input → input</b> first model call</td><td>the first <code>chat</code> span</td></tr>
+<tr><td>model call <b>output → input</b> tool it requested</td><td>each <code>execute_tool</code> span</td></tr>
+<tr><td>tool <b>output → input</b> next model call</td><td>the next <code>chat</code> span (one link per tool)</td></tr>
+<tr><td>last model call <b>output → output</b> agent</td><td>the <code>invoke_agent</code> span, when the agent finishes</td></tr>
+<tr><td>hand-off tool <b>input → input</b> sub-agent, and sub-agent <b>output → output</b> hand-off tool</td><td>the sub-agent's <code>invoke_agent</code> span, and the hand-off tool span</td></tr>
+</table>
+<p>A typical tool-use loop with all of this in place looks like the sketch below. Only the <code>withSpan</code> wrappers and links are new; <code>callYourModel</code> and <code>runYourTool</code> stand for code you already have.</p>
+<div class="code"><div class="code-title"><span>Sketch: your agent loop with spans and links</span><button class="copy">Copy</button></div><pre><code class="lang-js">import { withSpan, flow, json, genAiMessages, activeSpan, SpanKind } from &#x27;./tracing.js&#x27;;
+
+export async function runAgent({ name, model, messages, tools, sessionId }) {
+  const caller = activeSpan(); // the hand-off tool&#x27;s span when this agent runs as a sub-agent
+
+  // 1. Agent span. A sub-agent links its input to the tool that called it.
+  return withSpan(`invoke_agent ${name}`, {
+    attributes: {
+      &#x27;gen_ai.operation.name&#x27;: &#x27;invoke_agent&#x27;,
+      &#x27;gen_ai.agent.name&#x27;: name,
+      &#x27;gen_ai.conversation.id&#x27;: sessionId,
+      &#x27;gen_ai.input.messages&#x27;: genAiMessages(messages.slice(-1)),
+    },
+    links: caller ? [flow(caller.spanContext(), &#x27;input&#x27;, &#x27;input&#x27;)] : [],
+  }, async (agentSpan) =&gt; {
+    let inputs = [flow(agentSpan.spanContext(), &#x27;input&#x27;, &#x27;input&#x27;)]; // first model call reads the agent input
+
+    while (true) {
+      // 2. LLM span around YOUR existing model call, linked to whatever fed it.
+      const { message, chatSpan } = await withSpan(`chat ${model}`, {
+        kind: SpanKind.CLIENT,
+        attributes: {
+          &#x27;gen_ai.operation.name&#x27;: &#x27;chat&#x27;,
+          &#x27;gen_ai.request.model&#x27;: model,
+          &#x27;gen_ai.conversation.id&#x27;: sessionId,
+          &#x27;gen_ai.input.messages&#x27;: genAiMessages(messages),
+        },
+        links: inputs,
+      }, async (span) =&gt; {
+        const response = await callYourModel(messages, tools);           // unchanged
+        const message = response.choices[0].message;
+        span.setAttributes({
+          &#x27;gen_ai.usage.input_tokens&#x27;: response.usage?.prompt_tokens ?? 0,
+          &#x27;gen_ai.usage.output_tokens&#x27;: response.usage?.completion_tokens ?? 0,
+          &#x27;gen_ai.output.messages&#x27;: genAiMessages([message]),
+        });
+        return { message, chatSpan: span.spanContext() };
+      });
+
+      // 4. Done: the last model call&#x27;s output is the agent&#x27;s output (and the caller tool&#x27;s output).
+      if (!message.tool_calls?.length) {
+        agentSpan.addLink(flow(chatSpan, &#x27;output&#x27;, &#x27;output&#x27;));
+        caller?.addLink(flow(agentSpan.spanContext(), &#x27;output&#x27;, &#x27;output&#x27;));
+        agentSpan.setAttribute(&#x27;gen_ai.output.messages&#x27;, genAiMessages([message]));
+        return message.content;
+      }
+
+      // 3. Tool spans, each linked to the model call that requested it.
+      messages.push(message);
+      const results = await Promise.all(message.tool_calls.map((tc) =&gt;
+        withSpan(`execute_tool ${tc.function.name}`, {
+          attributes: {
+            &#x27;gen_ai.operation.name&#x27;: &#x27;execute_tool&#x27;,
+            &#x27;gen_ai.tool.name&#x27;: tc.function.name,
+            &#x27;gen_ai.tool.call.id&#x27;: tc.id,
+            &#x27;gen_ai.tool.call.arguments&#x27;: tc.function.arguments,
+          },
+          links: [flow(chatSpan, &#x27;output&#x27;, &#x27;input&#x27;)],
+        }, async (span) =&gt; {
+          const content = await runYourTool(tc);                         // unchanged; may call runAgent()
+          span.setAttribute(&#x27;gen_ai.tool.call.result&#x27;, json(content));
+          return { spanContext: span.spanContext(), reply: { role: &#x27;tool&#x27;, tool_call_id: tc.id, content } };
+        })));
+
+      messages.push(...results.map((r) =&gt; r.reply));
+      inputs = results.map((r) =&gt; flow(r.spanContext, &#x27;output&#x27;, &#x27;input&#x27;)); // tool results feed the next call
+    }
+  });
+}</code></pre></div>
+<div class="callout tip"><b>Sub-agents need no extra code.</b> When a tool handler calls <code>runAgent()</code>, <code>activeSpan()</code> returns that tool's span, so the sub-agent links itself to its caller in both directions. Because <code>withSpan</code> uses active spans, everything stays in one trace.</div>
+<p>The complete version in this repository adds model and provider names, the system prompt, tool definitions, token usage on the agent span, error handling and logging:</p>
+<details><summary>Show backend/src/agents/runAgent.js</summary><div class="code"><div class="code-title"><span>backend/src/agents/runAgent.js</span><button class="copy">Copy</button></div><pre><code class="lang-js">import { openai } from &#x27;./client.js&#x27;;
+import { withSpan, flow, json, genAiMessages, activeSpan, SpanKind, SpanStatusCode } from &#x27;../tracing.js&#x27;;
+import { promptTracking } from &#x27;./prompts.js&#x27;;
+
+const MAX_ITERATIONS = 6;
+const PROVIDER = &#x27;anthropic&#x27;; // OpenAI SDK -&gt; Anthropic&#x27;s OpenAI-compatible endpoint
+
+/**
+ * Generic tool-use loop on the OpenAI Chat Completions API, traced with OTel GenAI conventions.
+ * tools: [{ definition: {name, description, input_schema}, handler: async (input, ctx) =&gt; any }]
+ * ctx:   { log, sessionId, steps, sources } shared across the whole request (all agents).
+ * prompt: { id, version, template, variables } of the system prompt, for LLM Obs prompt tracking.
+ *
+ * Execution Graph edges (span links, all in one trace):
+ *   caller tool --input-&gt;input--&gt; agent --input-&gt;input--&gt; first chat
+ *   chat --output-&gt;input--&gt; each tool it called --output-&gt;input--&gt; next chat
+ *   last chat --output-&gt;output--&gt; agent --output-&gt;output--&gt; caller tool
+ */
+export async function runAgent({ name, description, model, system, prompt, messages, tools, ctx, maxTokens = 1024 }) {
+  const toolMap = new Map(tools.map((t) =&gt; [t.definition.name, t]));
+  const caller = activeSpan(); // set when this agent is invoked from a tool (sub-agent)
+  const toolDefs = tools.map((t) =&gt; ({
+    type: &#x27;function&#x27;,
+    function: { name: t.definition.name, description: t.definition.description, parameters: t.definition.input_schema },
+  }));
+  const systemInstructions = json([{ type: &#x27;text&#x27;, content: system }]);
+  // Same prompt metadata on every LLM call of this agent run; the user message is the agent&#x27;s input.
+  const promptAttr = prompt ? promptTracking(prompt, messages.at(-1)?.content) : undefined;
+  const toolDefinitions = json(
+    tools.map((t) =&gt; ({
+      type: &#x27;function&#x27;,
+      name: t.definition.name,
+      description: t.definition.description,
+      parameters: t.definition.input_schema,
+    })),
+  );
+
+  return withSpan(
+    `invoke_agent ${name}`,
+    {
+      attributes: {
+        &#x27;gen_ai.operation.name&#x27;: &#x27;invoke_agent&#x27;,
+        &#x27;gen_ai.provider.name&#x27;: PROVIDER,
+        &#x27;gen_ai.agent.name&#x27;: name,
+        &#x27;gen_ai.agent.description&#x27;: description,
+        &#x27;gen_ai.request.model&#x27;: model,
+        &#x27;gen_ai.request.max_tokens&#x27;: maxTokens,
+        &#x27;gen_ai.conversation.id&#x27;: ctx.sessionId,
+        &#x27;gen_ai.system_instructions&#x27;: systemInstructions,
+        &#x27;gen_ai.tool.definitions&#x27;: toolDefinitions,
+        &#x27;gen_ai.input.messages&#x27;: genAiMessages(messages.slice(-1)),
+      },
+      links: caller ? [flow(caller.spanContext(), &#x27;input&#x27;, &#x27;input&#x27;)] : [],
+    },
+    async (agentSpan) =&gt; {
+      const log = ctx.log.child({ agent: name, otel_trace_id: agentSpan.spanContext().traceId });
+      const convo = [{ role: &#x27;system&#x27;, content: system }, ...messages];
+      const usage = { input_tokens: 0, output_tokens: 0 };
+      log.info({ event: &#x27;agent.start&#x27;, model }, `Agent ${name} started`);
+
+      // The first LLM call consumes the agent&#x27;s input; later ones consume the tool results.
+      let chatInputs = [flow(agentSpan.spanContext(), &#x27;input&#x27;, &#x27;input&#x27;)];
+      let lastChat = null;
+
+      const finish = (text, iterations) =&gt; {
+        if (lastChat) agentSpan.addLink(flow(lastChat, &#x27;output&#x27;, &#x27;output&#x27;));
+        if (caller) caller.addLink(flow(agentSpan.spanContext(), &#x27;output&#x27;, &#x27;output&#x27;));
+        agentSpan.setAttributes({
+          &#x27;gen_ai.output.messages&#x27;: json([{ role: &#x27;assistant&#x27;, parts: [{ type: &#x27;text&#x27;, content: text }], finish_reason: &#x27;stop&#x27; }]),
+          &#x27;gen_ai.usage.input_tokens&#x27;: usage.input_tokens,
+          &#x27;gen_ai.usage.output_tokens&#x27;: usage.output_tokens,
+        });
+        return { text, usage, iterations };
+      };
+
+      for (let i = 1; i &lt;= MAX_ITERATIONS; i++) {
+        const t0 = Date.now();
+        const { response, choice, chatSpan } = await chat({ model, maxTokens, convo, toolDefs, systemInstructions, toolDefinitions, promptAttr, ctx, links: chatInputs });
+        lastChat = chatSpan;
+        usage.input_tokens += response.usage?.prompt_tokens ?? 0;
+        usage.output_tokens += response.usage?.completion_tokens ?? 0;
+        log.info(
+          {
+            event: &#x27;agent.llm_call&#x27;,
+            model: response.model,
+            iteration: i,
+            llm_ms: Date.now() - t0,
+            stop_reason: choice.finish_reason,
+            input_tokens: response.usage?.prompt_tokens,
+            output_tokens: response.usage?.completion_tokens,
+          },
+          `Agent ${name} LLM call ${i}`,
+        );
+
+        const toolCalls = choice.message.tool_calls ?? [];
+        if (choice.finish_reason !== &#x27;tool_calls&#x27; || toolCalls.length === 0) {
+          const text = choice.message.content ?? &#x27;&#x27;;
+          log.info({ event: &#x27;agent.end&#x27;, iterations: i, ...usage }, `Agent ${name} finished`);
+          return finish(text, i);
+        }
+
+        convo.push(choice.message);
+        const outcomes = await Promise.all(toolCalls.map((tc) =&gt; executeTool(tc, toolMap, ctx, log, name, chatSpan)));
+        convo.push(...outcomes.map((o) =&gt; o.result));
+        // Every tool result feeds the next LLM call.
+        chatInputs = outcomes.map((o) =&gt; flow(o.spanContext, &#x27;output&#x27;, &#x27;input&#x27;));
+      }
+
+      log.warn({ event: &#x27;agent.max_iterations&#x27;, ...usage }, `Agent ${name} hit max iterations`);
+      return finish(&quot;Sorry, I couldn&#x27;t complete that request. Please try rephrasing.&quot;, MAX_ITERATIONS);
+    },
+  );
+}
+
+/** One Chat Completions call inside a GenAI `chat` span (the OpenAI SDK has no native OTel spans). */
+function chat({ model, maxTokens, convo, toolDefs, systemInstructions, toolDefinitions, promptAttr, ctx, links }) {
+  return withSpan(
+    `chat ${model}`,
+    {
+      kind: SpanKind.CLIENT,
+      attributes: {
+        &#x27;gen_ai.operation.name&#x27;: &#x27;chat&#x27;,
+        &#x27;gen_ai.provider.name&#x27;: PROVIDER,
+        &#x27;gen_ai.request.model&#x27;: model,
+        &#x27;gen_ai.request.max_tokens&#x27;: maxTokens,
+        &#x27;gen_ai.conversation.id&#x27;: ctx.sessionId,
+        &#x27;gen_ai.system_instructions&#x27;: systemInstructions,
+        &#x27;gen_ai.tool.definitions&#x27;: toolDefinitions,
+        &#x27;gen_ai.input.messages&#x27;: genAiMessages(convo.filter((m) =&gt; m.role !== &#x27;system&#x27;)),
+        // Prompt tracking (id, version, template, variables); only read on LLM spans.
+        ...(promptAttr ? { &#x27;_dd.ml_obs.prompt_tracking&#x27;: promptAttr } : {}),
+      },
+      links,
+    },
+    async (span) =&gt; {
+      const response = await openai.chat.completions.create({ model, max_tokens: maxTokens, messages: convo, tools: toolDefs });
+      const choice = response.choices[0];
+      span.setAttributes({
+        &#x27;gen_ai.response.id&#x27;: response.id,
+        &#x27;gen_ai.response.model&#x27;: response.model,
+        &#x27;gen_ai.response.finish_reasons&#x27;: [choice.finish_reason],
+        &#x27;gen_ai.usage.input_tokens&#x27;: response.usage?.prompt_tokens ?? 0,
+        &#x27;gen_ai.usage.output_tokens&#x27;: response.usage?.completion_tokens ?? 0,
+        &#x27;gen_ai.output.messages&#x27;: genAiMessages([{ ...choice.message, finish_reason: choice.finish_reason }]),
+      });
+      return { response, choice, chatSpan: span.spanContext() };
+    },
+  );
+}
+
+async function executeTool(toolCall, toolMap, ctx, log, agentName, chatSpan) {
+  const toolUse = { id: toolCall.id, name: toolCall.function.name, input: parseArgs(toolCall.function.arguments) };
+  const tool = toolMap.get(toolUse.name);
+  const t0 = Date.now();
+  ctx.steps.push({ agent: agentName, tool: toolUse.name, input: toolUse.input });
+
+  return withSpan(
+    `execute_tool ${toolUse.name}`,
+    {
+      attributes: {
+        &#x27;gen_ai.operation.name&#x27;: &#x27;execute_tool&#x27;,
+        &#x27;gen_ai.tool.name&#x27;: toolUse.name,
+        &#x27;gen_ai.tool.type&#x27;: &#x27;function&#x27;,
+        &#x27;gen_ai.tool.call.id&#x27;: toolUse.id,
+        &#x27;gen_ai.tool.description&#x27;: tool?.definition.description,
+        &#x27;gen_ai.tool.call.arguments&#x27;: json(toolUse.input),
+      },
+      // The LLM&#x27;s tool call output is this tool&#x27;s input.
+      links: chatSpan ? [flow(chatSpan, &#x27;output&#x27;, &#x27;input&#x27;)] : [],
+    },
+    async (span) =&gt; {
+      const spanContext = span.spanContext();
+      try {
+        if (!tool) throw new Error(`Unknown tool ${toolUse.name}`);
+        const output = await tool.handler(toolUse.input, ctx);
+        const content = typeof output === &#x27;string&#x27; ? output : JSON.stringify(output);
+        span.setAttribute(&#x27;gen_ai.tool.call.result&#x27;, json(content));
+        log.info(
+          { event: &#x27;tool.call&#x27;, tool: toolUse.name, tool_input: toolUse.input, tool_ms: Date.now() - t0, status: &#x27;ok&#x27; },
+          `Tool ${toolUse.name} executed`,
+        );
+        return { spanContext, result: { role: &#x27;tool&#x27;, tool_call_id: toolUse.id, content } };
+      } catch (err) {
+        // Tool errors go back to the model as text, so record them without failing the request.
+        span.recordException(err);
+        span.setStatus({ code: SpanStatusCode.ERROR, message: err.message });
+        log.error({ event: &#x27;tool.call&#x27;, tool: toolUse.name, tool_input: toolUse.input, status: &#x27;error&#x27;, err }, `Tool ${toolUse.name} failed`);
+        return { spanContext, result: { role: &#x27;tool&#x27;, tool_call_id: toolUse.id, content: `Error: ${err.message}` } };
+      }
+    },
+  );
+}
+
+function parseArgs(args) {
+  try {
+    return args ? JSON.parse(args) : {};
+  } catch {
+    return {};
+  }
+}</code></pre></div></details>
+</section><section id="session"><h2><span class="n">6</span>Sessions and prompts</h2>
+<p><b>Sessions.</b> Set <code>gen_ai.conversation.id</code> to one ID per conversation on every agent and model span (the sketch passes <code>sessionId</code> through). All turns of a conversation then group into one LLM Observability session. If you already pass a session ID to <code>llmobs.trace()</code>, reuse that value.</p>
+<p><b>Prompt tracking (optional).</b> To see calls, tokens and latency per prompt version, add the attribute <code>_dd.ml_obs.prompt_tracking</code> to each <code>chat</code> span: a JSON string with <code>id</code>, <code>version</code>, <code>template</code> (or <code>chat_template</code>) and <code>variables</code>. This repository builds it with a small helper:</p>
+<div class="code"><div class="code-title"><span>backend/src/agents/prompts.js</span><button class="copy">Copy</button></div><pre><code class="lang-js">// Versioned prompt templates, tracked in Datadog LLM Observability (Prompt Tracking).
+// Every LLM span carries `_dd.ml_obs.prompt_tracking` (JSON: id, version, chat_template, variables),
+// so LLM Observability groups calls per prompt and version, diffs versions and opens them in
+// Playground. Bump `version` whenever a template changes.
+// https://docs.datadoghq.com/llm_observability/monitoring/prompt_tracking/
+
+/** Fills {{name}} placeholders from variables. */
+export function renderTemplate(template, variables = {}) {
+  return template.replace(/\{\{(\w+)\}\}/g, (_, name) =&gt; String(variables[name] ?? &#x27;&#x27;));
+}
+
+/** Value of the `_dd.ml_obs.prompt_tracking` span attribute for one LLM call. */
+export function promptTracking(prompt, userMessage) {
+  const variables = Object.fromEntries(Object.entries(prompt.variables ?? {}).map(([k, v]) =&gt; [k, String(v)]));
+  return JSON.stringify({
+    id: prompt.id,
+    version: prompt.version,
+    chat_template: [
+      { role: &#x27;system&#x27;, content: prompt.template },
+      { role: &#x27;user&#x27;, content: &#x27;{{user_message}}&#x27; },
+    ],
+    variables: { ...variables, user_message: String(userMessage ?? &#x27;&#x27;) },
+  });
+}</code></pre></div>
+<p>Step 9 of the full guide shows how the agents define their versioned prompts.</p>
+</section><section id="configure"><h2><span class="n">7</span>Configure the deployment</h2>
+<p>The OpenTelemetry spans go <b>from the app straight to Datadog</b> over HTTPS, not through the Datadog Agent. The app needs a Datadog API key and outbound access to <code>otlp.&lt;your site&gt;</code> on port 443.</p>
+<div class="code"><div class="code-title"><span>Environment variables</span><button class="copy">Copy</button></div><pre><code class="lang-bash"># Keep what you already have for dd-trace (DD_SERVICE, DD_ENV, DD_VERSION, DD_AGENT_HOST, DD_LOGS_INJECTION, ...)
+
+# 1. Switch dd-trace&#x27;s own LLM Observability off (otherwise every model call appears twice)
+unset DD_LLMOBS_ENABLED                          # and remove DD_LLMOBS_ML_APP / DD_LLMOBS_AGENTLESS_ENABLED
+
+# 2. Send OpenTelemetry GenAI spans straight to Datadog&#x27;s OTLP intake
+export DD_SITE=datadoghq.com                     # your site: datadoghq.eu, us3.datadoghq.com, ...
+export OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=&quot;https://otlp.${DD_SITE}/v1/traces&quot;
+export OTEL_EXPORTER_OTLP_TRACES_PROTOCOL=&quot;http/protobuf&quot;
+export OTEL_EXPORTER_OTLP_TRACES_HEADERS=&quot;dd-api-key=${DD_API_KEY},dd-otlp-source=llmobs,DD-LLMObs-Enabled=true&quot;
+export OTEL_SERVICE_NAME=&quot;my-agent&quot;              # becomes the LLM Observability ml_app</code></pre></div>
+<div class="code"><div class="code-title"><span>Kubernetes example</span><button class="copy">Copy</button></div><pre><code class="lang-yaml"># Kubernetes: container env (the API key comes from a Secret; $(DD_API_KEY) expands the variable above it)
+env:
+  - name: DD_API_KEY
+    valueFrom:
+      secretKeyRef: { name: datadog-secret, key: api-key }
+  - name: OTEL_EXPORTER_OTLP_TRACES_ENDPOINT
+    value: &quot;https://otlp.datadoghq.com/v1/traces&quot;
+  - name: OTEL_EXPORTER_OTLP_TRACES_PROTOCOL
+    value: &quot;http/protobuf&quot;
+  - name: OTEL_EXPORTER_OTLP_TRACES_HEADERS
+    value: &quot;dd-api-key=$(DD_API_KEY),dd-otlp-source=llmobs,DD-LLMObs-Enabled=true&quot;
+  - name: OTEL_SERVICE_NAME
+    value: &quot;my-agent&quot;
+  # no DD_LLMOBS_ENABLED</code></pre></div>
+<p>For comparison, this is how this repository's <code>start.sh</code> sets them:</p>
+<div class="code"><div class="code-title"><span>start.sh (excerpt)</span><button class="copy">Copy</button></div><pre><code class="lang-bash">  # dd-trace&#x27;s own LLM Obs stays OFF: agent spans come from OpenTelemetry (below) so the
+  # Execution Graph gets span links, which dd-trace JS cannot emit.
+  unset DD_LLMOBS_ENABLED
+
+  # LLM Observability via OpenTelemetry GenAI -&gt; Datadog OTLP intake (service.name = ml_app)
+  export OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=&quot;${OTEL_EXPORTER_OTLP_TRACES_ENDPOINT:-https://otlp.${DD_SITE}/v1/traces}&quot;
+  export OTEL_EXPORTER_OTLP_TRACES_PROTOCOL=&quot;http/protobuf&quot;
+  export OTEL_EXPORTER_OTLP_TRACES_HEADERS=&quot;dd-api-key=${DD_API_KEY},dd-otlp-source=llmobs,DD-LLMObs-Enabled=true&quot;
+  export OTEL_SERVICE_NAME=&quot;${DD_LLMOBS_ML_APP:-bitstalk-deal-buddy}&quot;</code></pre></div>
+</section><section id="verify"><h2><span class="n">8</span>Verify</h2>
+<div class="code"><div class="code-title"><span>Local check</span><button class="copy">Copy</button></div><pre><code class="lang-bash"># The app logs one line per OTLP export batch (from otel.js)
+grep &#x27;&quot;event&quot;:&quot;otel.export&quot;&#x27; &lt;your log file&gt; | tail -3
+#   status &quot;ok&quot;     -&gt; spans reached Datadog
+#   status &quot;error&quot;  -&gt; 401/403: wrong API key or DD_SITE; network error: no egress to otlp.&lt;site&gt;:443</code></pre></div>
+<p>Send a request that makes the agent call at least one tool, wait 3–4 minutes, then in Datadog (replace <code>app.datadoghq.com</code> with your site):</p>
+<ol class="verify">
+<li><a href="https://app.datadoghq.com/llm/traces">LLM Observability → Traces</a>, filter <code>@ml_app:&lt;OTEL_SERVICE_NAME&gt;</code>, open a trace and click <b>Execution Graph</b>. You should see the agent, its model calls and tools, and any sub-agent nested under its hand-off tool.</li>
+<li>In the same trace, click <b>View in APM</b>. Your existing APM trace for the request opens, and its <b>Logs</b> tab shows the request's logs.</li>
+<li>Check that each model call appears <b>once</b>. Two copies mean dd-trace's LLM Observability is still on (step 1).</li>
+</ol>
+</section><section id="troubleshoot"><h2><span class="n">9</span>Troubleshooting</h2>
+<table>
+<tr><th>Symptom</th><th>Cause and fix</th></tr>
+<tr><td>No traces in LLM Observability</td><td>Wait 3–4 minutes, then check the <code>otel.export</code> log lines. 401/403: wrong API key, or <code>DD_SITE</code> doesn't match your org. Network errors: the app has no egress to <code>otlp.&lt;site&gt;:443</code>.</td></tr>
+<tr><td>Traces appear but there is no <b>Execution Graph</b> button</td><td>The spans have no links, or the trace came from dd-trace's LLM Observability. Check that <code>DD_LLMOBS_ENABLED</code> is unset and that every <code>chat</code> and <code>execute_tool</code> span gets its <code>links</code>.</td></tr>
+<tr><td>The graph is missing edges, or a sub-agent floats on its own</td><td>A link is missing. Every model call after the first needs one link per tool result; a sub-agent must run inside its hand-off tool's <code>withSpan</code>, so that <code>activeSpan()</code> finds the tool.</td></tr>
+<tr><td>Every model call appears twice</td><td>dd-trace's LLM Observability is still on. Remove <code>DD_LLMOBS_ENABLED</code> everywhere it is set.</td></tr>
+<tr><td>Agent, model and tool spans are split across several traces</td><td>A span was started outside the active context, for example in a callback that lost the async context. Create spans with <code>withSpan</code> (it uses <code>startActiveSpan</code>) and <code>await</code> inside it.</td></tr>
+<tr><td><b>View in APM</b> finds no trace</td><td>The LLM Observability trace ID must equal the dd-trace trace ID. Check that <code>otel.js</code> passes <code>idGenerator: new DatadogTraceIdGenerator()</code>, is imported first, and that the app still starts with <code>--import dd-trace/initialize.mjs</code>.</td></tr>
+<tr><td>Each turn is its own session</td><td>Use the same <code>gen_ai.conversation.id</code> for every turn of a conversation.</td></tr>
+</table>
+</section></main>
+</div>
+<footer>Code samples are taken from the <code>main</code> branch of this repository. Full guide: <code>docs/datadog-instrumentation-guide.html</code>.</footer>
+<script>
+document.querySelectorAll('.copy').forEach(function (b) {
+  b.addEventListener('click', function () {
+    var text = b.closest('.code').querySelector('code').innerText;
+    navigator.clipboard.writeText(text).then(function () { b.textContent = 'Copied'; setTimeout(function () { b.textContent = 'Copy'; }, 1500); });
+  });
+});
+var links = document.querySelectorAll('nav a');
+var obs = new IntersectionObserver(function (entries) {
+  entries.forEach(function (e) {
+    if (e.isIntersecting) links.forEach(function (a) { a.classList.toggle('active', a.getAttribute('href') === '#' + e.target.id); });
+  });
+}, { rootMargin: '-40% 0px -55% 0px' });
+document.querySelectorAll('section').forEach(function (s) { obs.observe(s); });
+</script>
+</body>
+</html>

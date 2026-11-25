@@ -46,6 +46,10 @@ The chat response includes `steps` (every tool call per agent), which the UI sho
 - `POST /api/chat` – `{ sessionId, messages: [{role, content}] }` → `{ reply, sources, steps, usage }`
 
 ## Datadog instrumentation
+Guides (open in a browser, regenerate with `python3 docs/build_guide.py`):
+- `docs/datadog-instrumentation-guide.html`: full step-by-step setup of APM, logs and LLM Observability for this app.
+- `docs/execution-graph-addon-guide.html`: add the Execution Graph to a Node.js agent that already has dd-trace (APM, logs) working.
+
 `./start.sh` reads `DD_API_KEY` with `getSecretKey BITSTALK_DD_API_KEY`, starts a dedicated Agent container (`datadog/agent.sh`, key in the 0600 file `.dd/datadog.env`) and runs the backend with `node --import dd-trace/initialize.mjs`.
 
 | Signal | How |
